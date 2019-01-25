@@ -191,15 +191,15 @@ function setupLanguageServiceDefaults(languageId, isTypescript) {
 setupLanguageServiceDefaults("typescript", true);
 setupLanguageServiceDefaults("javascript", false);
 
-function getTypeScriptWorker(): monaco.Promise<any> {
+function getTypeScriptWorker(): Promise<any> {
 	return getLanguageWorker("typescript");
 }
 
-function getJavaScriptWorker(): monaco.Promise<any> {
+function getJavaScriptWorker(): Promise<any> {
 	return getLanguageWorker("javascript");
 }
 
-function getLanguageWorker(languageName: string): monaco.Promise<any> {
+function getLanguageWorker(languageName: string): Promise<any> {
 	return getMode().then(mode => mode.getNamedLanguageWorker(languageName));
 }
 
@@ -244,8 +244,8 @@ monaco.languages.typescript = createAPI();
 
 // --- Registration to monaco editor ---
 
-function getMode(): monaco.Promise<typeof mode> {
-	return monaco.Promise.wrap(import('./tsMode'))
+function getMode(): Promise<typeof mode> {
+	return import('./tsMode');
 }
 
 setupNamedLanguage({

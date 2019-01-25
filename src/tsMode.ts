@@ -9,7 +9,6 @@ import { TypeScriptWorker } from './tsWorker';
 import { LanguageServiceDefaultsImpl } from './monaco.contribution';
 import * as languageFeatures from './languageFeatures';
 
-import Promise = monaco.Promise;
 import Uri = monaco.Uri;
 
 let scriptWorkerMap: { [name: string]: (first: Uri, ...more: Uri[]) => Promise<TypeScriptWorker> } = {};
@@ -23,7 +22,7 @@ export function setupNamedLanguage(languageName: string, isTypescript: boolean, 
 
 export function getNamedLanguageWorker(languageName: string): Promise<(first: Uri, ...more: Uri[]) => Promise<TypeScriptWorker>> {
 	let workerName = languageName + "Worker";
-	return new monaco.Promise((resolve, reject) => {
+	return new Promise((resolve, reject) => {
 		if (!scriptWorkerMap[workerName]) {
 			return reject(languageName + " not registered!");
 		}
