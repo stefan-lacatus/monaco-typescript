@@ -134,15 +134,16 @@ export class DiagnostcsAdapter extends Adapter {
 				}
 			}
 		});
-		let redoDiagosticsCallback = () => {
+
+		const recomputeDiagostics = () => {
 			// redo diagnostics when options change
 			for (const model of monaco.editor.getModels()) {
 				onModelRemoved(model);
 				onModelAdd(model);
 			}
 		};
-		this._disposables.push(this._defaults.onDidChange(redoDiagosticsCallback));
-		this._disposables.push(this._defaults.onDidExtraLibsChange(redoDiagosticsCallback));
+		this._disposables.push(this._defaults.onDidChange(recomputeDiagostics));
+		this._disposables.push(this._defaults.onDidExtraLibsChange(recomputeDiagostics));
 
 		monaco.editor.getModels().forEach(onModelAdd);
 	}
@@ -212,6 +213,7 @@ export class SuggestAdapter extends Adapter implements monaco.languages.Completi
 
 	provideCompletionItems(model: monaco.editor.IReadOnlyModel, position: Position, _context: monaco.languages.CompletionContext, token: CancellationToken): Thenable<monaco.languages.CompletionList> {
 		const wordInfo = model.getWordUntilPosition(position);
+		const wordRange = new Range(position.lineNumber, wordInfo.startColumn, position.lineNumber, wordInfo.endColumn);
 		const resource = model.uri;
 		const offset = this._positionToOffset(resource, position);
 
@@ -222,9 +224,17 @@ export class SuggestAdapter extends Adapter implements monaco.languages.Completi
 				return;
 			}
 			let suggestions: MyCompletionItem[] = info.entries.map(entry => {
+				let range = wordRange;
+				if (entry.replacementSpan) {
+					const p1 = model.getPositionAt(entry.replacementSpan.start);
+					const p2 = model.getPositionAt(entry.replacementSpan.start + entry.replacementSpan.length);
+					range = new Range(p1.lineNumber, p1.column, p2.lineNumber, p2.column);
+				}
+
 				return {
 					uri: resource,
 					position: position,
+					range: range,
 					label: entry.name,
 					insertText: entry.name,
 					sortText: entry.sortText,

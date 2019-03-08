@@ -14,87 +14,95 @@ import IDisposable = monaco.IDisposable;
 
 // --- TypeScript configuration and defaults ---------
 
+export interface IExtraLib {
+	content: string;
+	version: number;
+}
+
+export interface IExtraLibs {
+	[path: string]: IExtraLib;
+}
+
 export class LanguageServiceDefaultsImpl implements monaco.languages.typescript.LanguageServiceDefaults {
 
-	private _onDidChange = new Emitter<monaco.languages.typescript.LanguageServiceDefaults>();
-	private _onDidExtraLibsChange = new Emitter<monaco.languages.typescript.LanguageServiceDefaults>();
+	private _onDidChange = new Emitter<void>();
+	private _onDidExtraLibsChange = new Emitter<void>();
 
-	private _extraLibs: { [path: string]: { content: string, version: number } };
+	private _extraLibs: IExtraLibs;
 	private _workerMaxIdleTime: number;
 	private _eagerModelSync: boolean;
 	private _compilerOptions: monaco.languages.typescript.CompilerOptions;
 	private _diagnosticsOptions: monaco.languages.typescript.DiagnosticsOptions;
-	private _languageId: string;
-	private _eagerExtraLibSync: boolean = true;
+	private _onDidExtraLibsChangeTimeout: number;
 
 	constructor(langualgeId: string, compilerOptions: monaco.languages.typescript.CompilerOptions, diagnosticsOptions: monaco.languages.typescript.DiagnosticsOptions) {
 		this._extraLibs = Object.create(null);
 		this._workerMaxIdleTime = 2 * 60 * 1000;
 		this.setCompilerOptions(compilerOptions);
 		this.setDiagnosticsOptions(diagnosticsOptions);
-		this._languageId = langualgeId;
+		this._onDidExtraLibsChangeTimeout = -1;
 	}
 
-	get onDidChange(): IEvent<monaco.languages.typescript.LanguageServiceDefaults> {
+	get onDidChange(): IEvent<void> {
 		return this._onDidChange.event;
 	}
 
-	get onDidExtraLibsChange(): IEvent<monaco.languages.typescript.LanguageServiceDefaults> {
+	get onDidExtraLibsChange(): IEvent<void> {
 		return this._onDidExtraLibsChange.event;
 	}
 
-	getExtraLibs(): { [path: string]: string; } {
-		const result = Object.create(null);
-		for (var key in this._extraLibs) {
-			result[key] = this._extraLibs[key];
-		}
-		return Object.freeze(result);
+	getExtraLibs(): IExtraLibs {
+		return this._extraLibs;
 	}
 
 	addExtraLib(content: string, filePath?: string): IDisposable {
 		if (typeof filePath === 'undefined') {
-			filePath = `ts:extralib-${Date.now()}`;
+			filePath = `ts:extralib-${Math.random().toString(36).substring(2, 15)}`;
 		}
 
-		if (this._extraLibs[filePath]) {
-			this._extraLibs[filePath].version++;
-			this._extraLibs[filePath].content = content;
-		} else {
-			this._extraLibs[filePath] = {
-				content: content,
-				version: 1
+		if (this._extraLibs[filePath] && this._extraLibs[filePath].content === content) {
+			// no-op, there already exists an extra lib with this content
+			return {
+				dispose: () => { }
 			};
 		}
-		if (this._eagerExtraLibSync) {
-			this.syncExtraLibs();
+
+		let myVersion = 1;
+		if (this._extraLibs[filePath]) {
+			myVersion = this._extraLibs[filePath].version + 1;
 		}
+
+		this._extraLibs[filePath] = {
+			content: content,
+			version: myVersion,
+		};
+		this._fireOnDidExtraLibsChangeSoon();
 
 		return {
 			dispose: () => {
-				if (delete this._extraLibs[filePath] && this._eagerExtraLibSync) {
-					this.syncExtraLibs();
+				let extraLib = this._extraLibs[filePath];
+				if (!extraLib) {
+					return;
 				}
+				if (extraLib.version !== myVersion) {
+					return;
+				}
+
+				delete this._extraLibs[filePath];
+				this._fireOnDidExtraLibsChangeSoon();
 			}
 		};
 	}
 
-	async syncExtraLibs() {
-		try {
-			let worker;
-			// we don't care if the get language worker fails.
-			// This happens because the worker initialzies much slower than the addExtraLib calls
-			try {
-				worker = await getLanguageWorker(this._languageId);
-			} catch (ignored) {
-				return;
-			}
-			const client = await worker("");
-			client.syncExtraLibs(this._extraLibs);
-			// let all listeners know that the extra libs have changed
-			this._onDidExtraLibsChange.fire(this);
-		} catch (error) {
-			console.error(error);
+	private _fireOnDidExtraLibsChangeSoon(): void {
+		if (this._onDidExtraLibsChangeTimeout !== -1) {
+			// already scheduled
+			return;
 		}
+		this._onDidExtraLibsChangeTimeout = setTimeout(() => {
+			this._onDidExtraLibsChangeTimeout = -1;
+			this._onDidExtraLibsChange.fire(undefined);
+		}, 0);
 	}
 
 	getCompilerOptions(): monaco.languages.typescript.CompilerOptions {
@@ -103,7 +111,7 @@ export class LanguageServiceDefaultsImpl implements monaco.languages.typescript.
 
 	setCompilerOptions(options: monaco.languages.typescript.CompilerOptions): void {
 		this._compilerOptions = options || Object.create(null);
-		this._onDidChange.fire(this);
+		this._onDidChange.fire(undefined);
 	}
 
 	getDiagnosticsOptions(): monaco.languages.typescript.DiagnosticsOptions {
@@ -112,7 +120,7 @@ export class LanguageServiceDefaultsImpl implements monaco.languages.typescript.
 
 	setDiagnosticsOptions(options: monaco.languages.typescript.DiagnosticsOptions): void {
 		this._diagnosticsOptions = options || Object.create(null);
-		this._onDidChange.fire(this);
+		this._onDidChange.fire(undefined);
 	}
 
 	setMaximumWorkerIdleTime(value: number): void {
@@ -133,10 +141,6 @@ export class LanguageServiceDefaultsImpl implements monaco.languages.typescript.
 
 	getEagerModelSync() {
 		return this._eagerModelSync;
-	}
-
-	setEagerExtraLibSync(value: boolean) {
-		this._eagerExtraLibSync = value;
 	}
 }
 
