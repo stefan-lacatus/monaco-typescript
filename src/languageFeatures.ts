@@ -223,7 +223,7 @@ export class SuggestAdapter extends Adapter implements monaco.languages.Completi
 			if (!info) {
 				return;
 			}
-			let suggestions: MyCompletionItem[] = info.entries.map(entry => {
+			let suggestions: MyCompletionItem[] = info.entries.map((entry, index) => {
 				let range = wordRange;
 				if (entry.replacementSpan) {
 					const p1 = model.getPositionAt(entry.replacementSpan.start);
@@ -237,7 +237,7 @@ export class SuggestAdapter extends Adapter implements monaco.languages.Completi
 					range: range,
 					label: entry.name,
 					insertText: entry.name,
-					sortText: entry.sortText,
+					sortText: entry.sortText + String.fromCharCode(index),
 					kind: SuggestAdapter.convertKind(entry.kind)
 				};
 			});
