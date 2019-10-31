@@ -7,6 +7,7 @@
 import * as mode from './tsMode';
 import * as tsDefinitions from 'vs/basic-languages/typescript/typescript';
 import * as jsDefinitions from 'vs/basic-languages/javascript/javascript';
+import { typescriptVersion } from './lib/typescriptServicesMetadata'; // do not import the whole typescriptServices here
 
 import Emitter = monaco.Emitter;
 import IEvent = monaco.IEvent;
@@ -153,18 +154,21 @@ enum ModuleKind {
 	UMD = 3,
 	System = 4,
 	ES2015 = 5,
-	ESNext = 6
+	ESNext = 99
 }
+
 enum JsxEmit {
 	None = 0,
 	Preserve = 1,
 	React = 2,
 	ReactNative = 3
 }
+
 enum NewLineKind {
 	CarriageReturnLineFeed = 0,
 	LineFeed = 1
 }
+
 enum ScriptTarget {
 	ES3 = 0,
 	ES5 = 1,
@@ -172,10 +176,13 @@ enum ScriptTarget {
 	ES2016 = 3,
 	ES2017 = 4,
 	ES2018 = 5,
-	ESNext = 6,
+	ES2019 = 6,
+	ES2020 = 7,
+	ESNext = 99,
 	JSON = 100,
-	Latest = 6
+	Latest = ESNext,
 }
+
 enum ModuleResolutionKind {
 	Classic = 1,
 	NodeJs = 2
@@ -258,6 +265,7 @@ function createAPI(): typeof monaco.languages.typescript {
 		ModuleResolutionKind: ModuleResolutionKind,
 		typescriptDefaults: getLanguageDefaults("typescript"),
 		javascriptDefaults: getLanguageDefaults("javascript"),
+		typescriptVersion,
 		getLanguageDefaults: getLanguageDefaults,
 		getTypeScriptWorker: getTypeScriptWorker,
 		getJavaScriptWorker: getJavaScriptWorker,

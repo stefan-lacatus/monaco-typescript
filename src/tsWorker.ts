@@ -164,6 +164,12 @@ export class TypeScriptWorker implements ts.LanguageServiceHost {
 		return Promise.resolve(diagnostics);
 	}
 
+	getSuggestionDiagnostics(fileName: string): Promise<ts.DiagnosticWithLocation[]> {
+		const diagnostics = this._languageService.getSuggestionDiagnostics(fileName);
+		TypeScriptWorker.clearFiles(diagnostics);
+		return Promise.resolve(diagnostics);
+	}
+
 	getCompilerOptionsDiagnostics(fileName: string): Promise<ts.Diagnostic[]> {
 		const diagnostics = this._languageService.getCompilerOptionsDiagnostics();
 		TypeScriptWorker.clearFiles(diagnostics);
@@ -212,6 +218,14 @@ export class TypeScriptWorker implements ts.LanguageServiceHost {
 
 	getFormattingEditsAfterKeystroke(fileName: string, postion: number, ch: string, options: ts.FormatCodeOptions): Promise<ts.TextChange[]> {
 		return Promise.resolve(this._languageService.getFormattingEditsAfterKeystroke(fileName, postion, ch, options));
+	}
+
+	findRenameLocations(fileName: string, positon: number, findInStrings: boolean, findInComments: boolean, providePrefixAndSuffixTextForRename: boolean): Promise<readonly ts.RenameLocation[]> {
+		return Promise.resolve(this._languageService.findRenameLocations(fileName, positon, findInStrings, findInComments, providePrefixAndSuffixTextForRename));
+	}
+
+	getRenameInfo(fileName: string, positon: number, options: ts.RenameInfoOptions): Promise<ts.RenameInfo> {
+		return Promise.resolve(this._languageService.getRenameInfo(fileName, positon, options));
 	}
 
 	getEmitOutput(fileName: string): Promise<ts.EmitOutput> {
@@ -517,6 +531,11 @@ export class TypeScriptWorker implements ts.LanguageServiceHost {
 
 		return tokens;
 	}
+	getCodeFixesAtPosition(fileName: string, start: number, end: number, errorCodes: number[], formatOptions: ts.FormatCodeOptions): Promise<ReadonlyArray<ts.CodeFixAction>> {
+		const preferences = {}
+		return Promise.resolve(this._languageService.getCodeFixesAtPosition(fileName, start, end, errorCodes, formatOptions, preferences));
+	}
+
 	updateExtraLibs(extraLibs: IExtraLibs) {
 		this._extraLibs = extraLibs;
 	}

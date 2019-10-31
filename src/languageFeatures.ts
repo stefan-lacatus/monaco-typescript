@@ -23,26 +23,29 @@ enum IndentStyle {
 	Smart = 2
 }
 
-function flattenDiagnosticMessageText(messageText: string | ts.DiagnosticMessageChain, newLine: '\n'): string {
-	if (typeof messageText === "string") {
-		return messageText;
-	} else {
-		let diagnosticChain = messageText;
-		let result = "";
-		let indent = 0;
-		while (diagnosticChain) {
-			if (indent) {
-				result += newLine;
-				for (let i = 0; i < indent; i++) {
-					result += "  ";
-				}
-			}
-			result += diagnosticChain.messageText;
-			indent++;
-			diagnosticChain = diagnosticChain.next;
-		}
-		return result;
+export function flattenDiagnosticMessageText(diag: string | ts.DiagnosticMessageChain | undefined, newLine: string, indent = 0): string {
+	if (typeof diag === "string") {
+		return diag;
 	}
+	else if (diag === undefined) {
+		return "";
+	}
+	let result = "";
+	if (indent) {
+		result += newLine;
+
+		for (let i = 0; i < indent; i++) {
+			result += "  ";
+		}
+	}
+	result += diag.messageText;
+	indent++;
+	if (diag.next) {
+		for (const kid of diag.next) {
+			result += flattenDiagnosticMessageText(kid, newLine, indent);
+		}
+	}
+	return result;
 }
 
 function displayPartsToString(displayParts: ts.SymbolDisplayPart[]): string {
@@ -80,7 +83,7 @@ export abstract class Adapter {
 
 // --- diagnostics --- ---
 
-export class DiagnostcsAdapter extends Adapter {
+export class DiagnosticsAdapter extends Adapter {
 
 	private _disposables: IDisposable[] = [];
 	private _listener: { [uri: string]: IDisposable } = Object.create(null);
@@ -160,12 +163,15 @@ export class DiagnostcsAdapter extends Adapter {
 				return null;
 			}
 			const promises: Promise<ts.Diagnostic[]>[] = [];
-			const { noSyntaxValidation, noSemanticValidation } = this._defaults.getDiagnosticsOptions();
+			const { noSyntaxValidation, noSemanticValidation, noSuggestionDiagnostics } = this._defaults.getDiagnosticsOptions();
 			if (!noSyntaxValidation) {
 				promises.push(worker.getSyntacticDiagnostics(resource.toString()));
 			}
 			if (!noSemanticValidation) {
 				promises.push(worker.getSemanticDiagnostics(resource.toString()));
+			}
+			if (!noSuggestionDiagnostics) {
+				promises.push(worker.getSuggestionDiagnostics(resource.toString()));
 			}
 			return Promise.all(promises);
 		}).then(diagnostics => {
@@ -188,13 +194,23 @@ export class DiagnostcsAdapter extends Adapter {
 		const { lineNumber: endLineNumber, column: endColumn } = this._offsetToPosition(resource, diag.start + diag.length);
 
 		return {
-			severity: monaco.MarkerSeverity.Error,
+			severity: this._tsDiagnosticCategoryToMarkerSeverity(diag.category),
 			startLineNumber,
 			startColumn,
 			endLineNumber,
 			endColumn,
-			message: flattenDiagnosticMessageText(diag.messageText, '\n')
+			message: flattenDiagnosticMessageText(diag.messageText, '\n'),
+			code: diag.code.toString()
 		};
+	}
+
+	private _tsDiagnosticCategoryToMarkerSeverity(category: ts.DiagnosticCategory): monaco.MarkerSeverity {
+		switch (category) {
+			case ts.DiagnosticCategory.Error: return monaco.MarkerSeverity.Error
+			case ts.DiagnosticCategory.Message: return monaco.MarkerSeverity.Info
+			case ts.DiagnosticCategory.Warning: return monaco.MarkerSeverity.Warning
+			case ts.DiagnosticCategory.Suggestion: return monaco.MarkerSeverity.Hint
+		}
 	}
 }
 
@@ -313,7 +329,7 @@ export class SignatureHelpAdapter extends Adapter implements monaco.languages.Si
 
 	public signatureHelpTriggerCharacters = ['(', ','];
 
-	provideSignatureHelp(model: monaco.editor.IReadOnlyModel, position: Position, token: CancellationToken): Thenable<monaco.languages.SignatureHelp> {
+	provideSignatureHelp(model: monaco.editor.IReadOnlyModel, position: Position, token: CancellationToken): Thenable<monaco.languages.SignatureHelpResult> {
 		let resource = model.uri;
 		return this._worker(resource).then(worker => worker.getSignatureHelpItems(resource.toString(), this._positionToOffset(resource, position))).then(info => {
 
@@ -331,7 +347,6 @@ export class SignatureHelpAdapter extends Adapter implements monaco.languages.Si
 
 				let signature: monaco.languages.SignatureInformation = {
 					label: '',
-					documentation: null,
 					parameters: []
 				};
 
@@ -352,8 +367,10 @@ export class SignatureHelpAdapter extends Adapter implements monaco.languages.Si
 				ret.signatures.push(signature);
 			});
 
-			return ret;
-
+			return {
+				value: ret,
+				dispose() { }
+			};
 		});
 	}
 }
@@ -491,6 +508,7 @@ export class OutlineAdapter extends Adapter implements monaco.languages.Document
 					kind: <monaco.languages.SymbolKind>(outlineTypeTable[item.kind] || monaco.languages.SymbolKind.Variable),
 					range: this._textSpanToRange(resource, item.spans[0]),
 					selectionRange: this._textSpanToRange(resource, item.spans[0]),
+					tags: [],
 					containerName: containerLabel
 				};
 
@@ -624,5 +642,102 @@ export class FormatOnTypeAdapter extends FormatHelper implements monaco.language
 				return edits.map(edit => this._convertTextChanges(resource, edit));
 			}
 		});
+	}
+}
+
+// --- code actions ------
+
+export class CodeActionAdaptor extends FormatHelper implements monaco.languages.CodeActionProvider {
+
+	public provideCodeActions(model: monaco.editor.ITextModel, range: Range, context: monaco.languages.CodeActionContext, token: CancellationToken): Promise<monaco.languages.CodeActionList> {
+		const resource = model.uri;
+
+		return this._worker(resource).then(worker => {
+			const start = this._positionToOffset(resource, { lineNumber: range.startLineNumber, column: range.startColumn });
+			const end = this._positionToOffset(resource, { lineNumber: range.endLineNumber, column: range.endColumn });
+
+			const formatOptions = FormatHelper._convertOptions(model.getOptions());
+			const errorCodes = context.markers.filter(m => m.code).map(m => m.code).map(Number);
+
+			return worker.getCodeFixesAtPosition(resource.toString(), start, end, errorCodes, formatOptions);
+
+		}).then(codeFixes => {
+
+			return codeFixes.filter(fix => {
+				// Removes any 'make a new file'-type code fix
+				return fix.changes.filter(change => change.isNewFile).length === 0;
+			}).map(fix => {
+				return this._tsCodeFixActionToMonacoCodeAction(model, context, fix);
+			})
+		}).then(result => {
+			return {
+				actions: result,
+				dispose: () => { }
+			};
+		});
+	}
+
+
+	private _tsCodeFixActionToMonacoCodeAction(model: monaco.editor.ITextModel, context: monaco.languages.CodeActionContext, codeFix: ts.CodeFixAction): monaco.languages.CodeAction {
+		const edits: monaco.languages.ResourceTextEdit[] = codeFix.changes.map(edit => ({
+			resource: model.uri,
+			edits: edit.textChanges.map(tc => ({
+				range: this._textSpanToRange(model.uri, tc.span),
+				text: tc.newText
+			}))
+		}));
+
+		const action: monaco.languages.CodeAction = {
+			title: codeFix.description,
+			edit: { edits: edits },
+			diagnostics: context.markers,
+			kind: "quickfix"
+		};
+
+		return action;
+	}
+}
+// --- rename ----
+
+export class RenameAdapter extends Adapter implements monaco.languages.RenameProvider {
+
+	async provideRenameEdits(model: monaco.editor.ITextModel, position: Position, newName: string, token: CancellationToken): Promise<monaco.languages.WorkspaceEdit & monaco.languages.Rejection> {
+		const resource = model.uri;
+		const fileName = resource.toString();
+		const offset = this._positionToOffset(resource, position);
+		const worker = await this._worker(resource);
+
+		const renameInfo = await worker.getRenameInfo(fileName, offset, { allowRenameOfImportPath: false });
+		if (renameInfo.canRename === false) { // use explicit comparison so that the discriminated union gets resolved properly
+			return {
+				edits: [],
+				rejectReason: renameInfo.localizedErrorMessage
+			};
+		}
+		if (renameInfo.fileToRename !== undefined) {
+			throw new Error("Renaming files is not supported.");
+		}
+
+		const renameLocations = await worker.findRenameLocations(fileName, offset, /*strings*/ false, /*comments*/ false, /*prefixAndSuffix*/ false);
+		const fileNameToResourceTextEditMap: { [fileName: string]: monaco.languages.ResourceTextEdit } = {};
+
+		const edits: monaco.languages.ResourceTextEdit[] = [];
+		for (const renameLocation of renameLocations) {
+			if (!(renameLocation.fileName in fileNameToResourceTextEditMap)) {
+				const resourceTextEdit = {
+					edits: [],
+					resource: monaco.Uri.parse(renameLocation.fileName)
+				};
+				fileNameToResourceTextEditMap[renameLocation.fileName] = resourceTextEdit;
+				edits.push(resourceTextEdit);
+			}
+
+			fileNameToResourceTextEditMap[renameLocation.fileName].edits.push({
+				range: this._textSpanToRange(resource, renameLocation.textSpan),
+				text: newName
+			});
+		}
+
+		return { edits };
 	}
 }
