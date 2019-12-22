@@ -92,6 +92,7 @@ export const isElementAccessExpression = ts.isElementAccessExpression;
 export const SyntaxKind = ts.SyntaxKind;
 export const isStringLiteral = ts.isStringLiteral;
 export const tokenToString = ts.tokenToString;
+export const escapeLeadingUnderscores = ts.escapeLeadingUnderscores;
 // END MONACOCHANGE
 `;
 	fs.writeFileSync(path.join(TYPESCRIPT_LIB_DESTINATION, 'typescriptServices.js'), tsServices_esm);
