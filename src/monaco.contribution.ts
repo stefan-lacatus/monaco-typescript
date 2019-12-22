@@ -215,7 +215,7 @@ const languageDefaultOptions = {
 
 const languageDefaults: { [name: string]: LanguageServiceDefaultsImpl } = {};
 
-function setupLanguageServiceDefaults(languageId, isTypescript) {
+function setupLanguageServiceDefaults(languageId: string, isTypescript: boolean) {
 	const languageOptions = languageDefaultOptions[isTypescript ? "typescript" : "javascript"]
 	languageDefaults[languageId] = new LanguageServiceDefaultsImpl(languageId, languageOptions.compilerOptions, languageOptions.diagnosticsOptions);
 }

@@ -191,3 +191,6 @@ declare module monaco.languages.typescript {
     export var setupNamedLanguage: (languageDefinition: languages.ILanguageExtensionPoint, isTypescript: boolean, registerLanguage?: boolean) => void;
     export var getLanguageDefaults: (languageName: string) => LanguageServiceDefaults;
 }
+
+declare module 'vs/basic-languages/javascript/javascript';
+declare module 'vs/basic-languages/typescript/typescript';
