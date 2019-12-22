@@ -233,303 +233,315 @@ export class TypeScriptWorker implements ts.LanguageServiceHost {
 		return Promise.resolve(this._languageService.getEmitOutput(fileName));
 	}
 
-	getPropertiesOrAttributesOf(fileName: string, parentObjects: string[]) {
-		let currentFile = this._languageService.getProgram().getSourceFile(fileName);
-		let typeChecker = this._languageService.getProgram().getTypeChecker();
-		let referencedEntities = {};
+	getPropertiesOrAttributesOf(fileName: string, parentObjects: string[]): { [name: string]: { [name: string]: boolean } } {
+		let referencedEntities: { [name: string]: { [name: string]: boolean } } = {};
 		parentObjects.forEach(function (key) { referencedEntities[key] = {}; });
-		ts.forEachChild(currentFile, function visitNodes(node: ts.Node) {
-			if (ts.isPropertyAccessExpression(node) && referencedEntities[node.expression.getText()]) {
-				// Matches Things.test
-				if (!(node.name.text in referencedEntities[node.expression.getText()])) {
-					referencedEntities[node.expression.getText()][node.name.text] = true;
-				}
-			} else if (ts.isElementAccessExpression(node) && referencedEntities[node.expression.getText()] && node.argumentExpression) {
-				if (node.argumentExpression.kind == ts.SyntaxKind.Identifier) {
-					if (node.expression.getText() == "Users" && node.argumentExpression.getText() == "principal") {
-						// a special case for Users[principal] => replace principal with "Administrator",
-						// since all users have the same properties and functions
-						referencedEntities["Users"]["System"] = true;
-					}
-				}
-				if (node.argumentExpression.kind == ts.SyntaxKind.PropertyAccessExpression) {
-					// matches Things[me.property]
-					let type = typeChecker.getTypeAtLocation(node.argumentExpression);
-					if(type["value"]) {
-						referencedEntities[node.expression.getText()][type["value"]] = true;
-					}
-				} else if (ts.isStringLiteral(node.argumentExpression)) {
-					// matches Things["test"]
-					referencedEntities[node.expression.getText()][node.argumentExpression.getText().slice(1, -1)] = true;
-				}
-			}
-			return ts.forEachChild(node, visitNodes);
-		});
+		let program = this._languageService.getProgram();
+		if (program) {
+			let currentFile = program.getSourceFile(fileName);
+			if (currentFile) {
+				let typeChecker = program.getTypeChecker();
 
+				ts.forEachChild(currentFile, function visitNodes(node: ts.Node) {
+					if (ts.isPropertyAccessExpression(node) && referencedEntities[node.expression.getText()]) {
+						// Matches Things.test
+						if (!(node.name.text in referencedEntities[node.expression.getText()])) {
+							referencedEntities[node.expression.getText()][node.name.text] = true;
+						}
+					} else if (ts.isElementAccessExpression(node) && referencedEntities[node.expression.getText()] && node.argumentExpression) {
+						if (node.argumentExpression.kind == ts.SyntaxKind.Identifier) {
+							if (node.expression.getText() == "Users" && node.argumentExpression.getText() == "principal") {
+								// a special case for Users[principal] => replace principal with "Administrator",
+								// since all users have the same properties and functions
+								referencedEntities["Users"]["System"] = true;
+							}
+						}
+						if (node.argumentExpression.kind == ts.SyntaxKind.PropertyAccessExpression) {
+							// matches Things[me.property]
+							let type = typeChecker.getTypeAtLocation(node.argumentExpression);
+							if ('value' in type) {
+								referencedEntities[node.expression.getText()][type["value"]] = true;
+							}
+						} else if (ts.isStringLiteral(node.argumentExpression)) {
+							// matches Things["test"]
+							referencedEntities[node.expression.getText()][node.argumentExpression.getText().slice(1, -1)] = true;
+						}
+					}
+					ts.forEachChild(node, visitNodes);
+				});
+			}
+		}
 		return referencedEntities;
 	}
 
 	getOutline(fileName: string, parentObjects: string[]): CodeOutlineToken[] {
 		let tokens: CodeOutlineToken[] = [];
-		let currentFile = this._languageService.getProgram().getSourceFile(fileName);
+		let program = this._languageService.getProgram();
+		if (program) {
 
-		let ordinal = 0;
-		let indentation = 0;
 
-		function indents() {
-			let indents = '';
-			for (let i = 0; i < indentation; i++) {
-				indents += '<span class="BMCHIndent">&nbsp;&nbsp;</span>';
-			}
-			return indents;
-		}
+			let currentFile = program.getSourceFile(fileName);
+			if (currentFile) {
+				let ordinal = 0;
+				let indentation = 0;
 
-		function extractLiteral(/** @type {ts.ObjectLiteralExpression} */ liternalNode) {
-			let didExtractLiteral = false;
+				const getEscapedTextOfIdentifierOrLiteral = function (node?: { kind: ts.SyntaxKind, escapedText?: ts.__String, text?: string }): string | undefined {
+					if(node) {
+						return node.kind === ts.SyntaxKind.Identifier ? node.escapedText as string : node.text;
+					}
+				}
 
-			// Object literals should only be extracted if they have at least a method or any getter/setter
-			let methodCount = 0;
-			liternalNode.properties.forEach(property => {
-				switch (property.kind) {
-					case ts.SyntaxKind.MethodDeclaration:
-					case ts.SyntaxKind.MethodSignature:
-					case ts.SyntaxKind.FunctionDeclaration:
-					case ts.SyntaxKind.FunctionExpression:
-						methodCount++;
-						break;
-					case ts.SyntaxKind.GetAccessor:
-					case ts.SyntaxKind.SetAccessor:
-						didExtractLiteral = true;
-						break;
-					case ts.SyntaxKind.PropertyAssignment:
-						if (property.initializer &&
-							(property.initializer.kind == ts.SyntaxKind.FunctionDeclaration || property.initializer.kind == ts.SyntaxKind.FunctionExpression)) {
+				const extractLiteral = (liternalNode: ts.ObjectLiteralExpression) => {
+					let didExtractLiteral = false;
+
+					// Object literals should only be extracted if they have at least a method or any getter/setter
+					let methodCount = 0;
+					liternalNode.properties.forEach(property => {
+						switch (property.kind) {
+							case ts.SyntaxKind.MethodDeclaration:
 								methodCount++;
-						}
-				}
-			});
-
-			if (methodCount > 0) {
-				didExtractLiteral = true;
-			}
-
-			if (didExtractLiteral) {
-				ordinal++;
-				let parentNode = liternalNode.parent;
-
-				// Compute the name for assignments, call expressions and others
-				let name = '';
-				if (parentNode.kind == ts.SyntaxKind.PropertyAssignment) {
-					name = (parentNode.name && parentNode.name.escapedText) || '';
-				}
-				else if (parentNode.kind == ts.SyntaxKind.VariableDeclaration) {
-					name = (parentNode.name && parentNode.name.escapedText) || '';
-				}
-				else if (parentNode.kind == ts.SyntaxKind.CallExpression) {
-					name = (parentNode.expression && parentNode.expression.getFullText().trim()) || '';
-					if (name) {
-						let nameTokens = name.split('\n');
-						name = nameTokens[nameTokens.length - 1];
-						name = name + '()';
-					}
-				}
-				else if (parentNode.kind == ts.SyntaxKind.BinaryExpression) {
-					// Only handle these for assignments
-					/** @type {ts.BinaryOperatorToken} */ let sign = parentNode.operatorToken;
-					if (ts.tokenToString(sign.kind) == '=') {
-						let left = parentNode.left;
-						let nameTokens;
-						switch (left.kind) {
-							case ts.SyntaxKind.VariableDeclaration:
-								name = (left.name && left.name.escapedText) || '';
 								break;
-							case ts.SyntaxKind.PropertyAccessExpression:
-								name = left.getFullText().trim();
-								nameTokens = name.split('\n');
+							case ts.SyntaxKind.GetAccessor:
+							case ts.SyntaxKind.SetAccessor:
+								didExtractLiteral = true;
+								break;
+							case ts.SyntaxKind.PropertyAssignment:
+								if (property.initializer &&
+									(property.initializer.kind == ts.SyntaxKind.FunctionDeclaration || property.initializer.kind == ts.SyntaxKind.FunctionExpression)) {
+									methodCount++;
+								}
+						}
+					});
+
+					if (methodCount > 0) {
+						didExtractLiteral = true;
+					}
+
+					if (didExtractLiteral) {
+						ordinal++;
+						let parentNode = liternalNode.parent;
+
+						// Compute the name for assignments, call expressions and others
+						let name = '';
+						if (parentNode.kind == ts.SyntaxKind.VariableDeclaration || parentNode.kind == ts.SyntaxKind.PropertyAssignment) {
+							let parentNodeAsVariableDeclaration = parentNode as ts.Node & { name: ts.PropertyName };
+							name = getEscapedTextOfIdentifierOrLiteral(parentNodeAsVariableDeclaration.name) || '';
+						}
+						else if (parentNode.kind == ts.SyntaxKind.CallExpression) {
+							let parentNodeAsCallExpression = parentNode as ts.CallExpression;
+							name = (parentNodeAsCallExpression.expression && parentNodeAsCallExpression.expression.getFullText().trim()) || '';
+							if (name) {
+								let nameTokens = name.split('\n');
 								name = nameTokens[nameTokens.length - 1];
-								break;
+								name = name + '()';
+							}
+						}
+						else if (parentNode.kind == ts.SyntaxKind.BinaryExpression) {
+							let parentNodeAsBinaryExpression = parentNode as ts.BinaryExpression;
+							// Only handle these for assignments
+							let sign: ts.BinaryOperatorToken = parentNodeAsBinaryExpression.operatorToken;
+							if (ts.tokenToString(sign.kind) == '=') {
+								let left = parentNodeAsBinaryExpression.left;
+								let nameTokens;
+								switch (left.kind) {
+									case ts.SyntaxKind.VariableDeclaration:
+										let leftVariableDeclaration = left as unknown as ts.VariableDeclaration;
+										name = getEscapedTextOfIdentifierOrLiteral(leftVariableDeclaration.name) || '';
+										break;
+									case ts.SyntaxKind.PropertyAccessExpression:
+										name = left.getFullText().trim();
+										nameTokens = name.split('\n');
+										name = nameTokens[nameTokens.length - 1];
+										break;
+								}
+							}
+						}
+
+						tokens.push({
+							name: name || '{}',
+							kind: CodeOutlineTokenKind.ObjectLiteral,
+							ordinal: ordinal,
+							line: currentFile?.getLineAndCharacterOfPosition(liternalNode.getStart()).line || 0,
+							indentAmount: indentation
+						});
+					}
+
+					return didExtractLiteral;
+				}
+
+				const extractClass = function (classNode: ts.ClassDeclaration) {
+					ordinal++;
+					if (classNode.name) {
+						tokens.push({
+							name: getEscapedTextOfIdentifierOrLiteral(classNode.name) || "",
+							kind: CodeOutlineTokenKind.Class,
+							ordinal: ordinal,
+							line: currentFile?.getLineAndCharacterOfPosition(classNode.getStart()).line || 0,
+							indentAmount: indentation
+						});
+					}
+					else {
+						tokens.push({
+							name: '{}',
+							kind: CodeOutlineTokenKind.Class,
+							ordinal: ordinal,
+							line: currentFile?.getLineAndCharacterOfPosition(classNode.getStart()).line || 0,
+							indentAmount: indentation
+						});
+					}
+				}
+
+				const extractMethod = function (methodNode: ts.FunctionLikeDeclaration) {
+					ordinal++;
+					let node = methodNode;
+					let line = currentFile?.getLineAndCharacterOfPosition(methodNode.getStart()).line || 0;
+
+					let parentNode = methodNode.parent;
+					// isMethodKind is set to YES for function declarations whose parent is a property assignment
+					let isMethodKind = false;
+
+					// Compute the name for assignments
+					let name = '';
+					if (parentNode.kind == ts.SyntaxKind.PropertyAssignment) {
+						let parentNodeAsPropertyAssignment = parentNode as ts.PropertyAssignment;
+						name = getEscapedTextOfIdentifierOrLiteral(parentNodeAsPropertyAssignment.name) || '';
+						isMethodKind = true;
+					}
+					else if (parentNode.kind == ts.SyntaxKind.VariableDeclaration) {
+						let parentNodeAsVariableDeclaration = parentNode as ts.VariableDeclaration;
+						name = getEscapedTextOfIdentifierOrLiteral(parentNodeAsVariableDeclaration.name) || '';
+					}
+					else if (parentNode.kind == ts.SyntaxKind.CallExpression) {
+						let parentNodeAsCallExpression = parentNode as ts.CallExpression;
+						name = (parentNodeAsCallExpression.expression && parentNodeAsCallExpression.expression.getFullText().trim()) || '';
+						if (name) {
+							let nameTokens = name.split('\n');
+							name = nameTokens[nameTokens.length - 1].trim();
+							name = name + '()';
 						}
 					}
-				}
+					else if (parentNode.kind == ts.SyntaxKind.BinaryExpression) {
+						// Only handle these for assignments
+						let parentNodeAsBinaryExpression = parentNode as ts.BinaryExpression;
+						let sign = parentNodeAsBinaryExpression.operatorToken;
+						if (ts.tokenToString(sign.kind) == '=') {
+							let left = parentNodeAsBinaryExpression.left;
+							let nameTokens;
+							switch (left.kind) {
+								case ts.SyntaxKind.VariableDeclaration:
+									let leftAsVariableDeclaration = left as unknown as ts.VariableDeclaration;
+									name = getEscapedTextOfIdentifierOrLiteral(leftAsVariableDeclaration.name) || '';
+									break;
+								case ts.SyntaxKind.PropertyAccessExpression:
+									name = left.getFullText().trim();
+									nameTokens = name.split('\n');
+									name = nameTokens[nameTokens.length - 1].trim();
+									break;
+							}
+						}
+					}
 
-				tokens.push({
-					name: name || '{}',
-					kind: CodeOutlineTokenKind.ObjectLiteral,
-					ordinal: ordinal,
-					line: currentFile.getLineAndCharacterOfPosition(liternalNode.getStart()).line,
-					indentAmount: indentation
-				});
-			}
-
-			return didExtractLiteral;
-		}
-
-		function extractClass(/** @type {ts.ClassDeclaration} */ classNode) {
-			ordinal++;
-			if (classNode.name) {
-				tokens.push({
-					name: classNode.name.escapedText,
-					kind: CodeOutlineTokenKind.Class,
-					ordinal: ordinal,
-					line: currentFile.getLineAndCharacterOfPosition(classNode.getStart()).line,
-					indentAmount: indentation
-				});
-			}
-			else {
-				tokens.push({
-					name: '{}',
-					kind: CodeOutlineTokenKind.Class,
-					ordinal: ordinal,
-					line: currentFile.getLineAndCharacterOfPosition(classNode.getStart()).line,
-					indentAmount: indentation
-				});
-			}
-		}
-
-		function extractMethod(/** @type {ts.FunctionLikeDeclaration} */ methodNode) {
-			ordinal++;
-			let node = methodNode;
-			let line = currentFile.getLineAndCharacterOfPosition(methodNode.getStart()).line;
-
-			let parentNode = methodNode.parent;
-			// isMethodKind is set to YES for function declarations whose parent is a property assignment
-			let isMethodKind = false;
-
-			// Compute the name for assignments
-			let name = '';
-			if (parentNode.kind == ts.SyntaxKind.PropertyAssignment) {
-				name = (parentNode.name && parentNode.name.escapedText) || '';
-				isMethodKind = true;
-			}
-			else if (parentNode.kind == ts.SyntaxKind.VariableDeclaration) {
-				name = (parentNode.name && parentNode.name.escapedText) || '';
-			}
-			else if (parentNode.kind == ts.SyntaxKind.CallExpression) {
-				name = (parentNode.expression && parentNode.expression.getFullText().trim()) || '';
-				if (name) {
-					let nameTokens = name.split('\n');
-					name = nameTokens[nameTokens.length - 1].trim();
-					name = name + '()';
-				}
-			}
-			else if (parentNode.kind == ts.SyntaxKind.BinaryExpression) {
-				// Only handle these for assignments
-				/** @type {ts.BinaryOperatorToken} */ let sign = parentNode.operatorToken;
-				if (ts.tokenToString(sign.kind) == '=') {
-					let left = parentNode.left;
-					let nameTokens;
-					switch (left.kind) {
-						case ts.SyntaxKind.VariableDeclaration:
-							name = (left.name && left.name.escapedText) || '';
+					switch (methodNode.kind) {
+						case ts.SyntaxKind.Constructor:
+							tokens.push({
+								name: 'constructor ()',
+								kind: CodeOutlineTokenKind.Constructor,
+								ordinal: ordinal,
+								line: line,
+								indentAmount: indentation
+							})
 							break;
-						case ts.SyntaxKind.PropertyAccessExpression:
-							name = left.getFullText().trim();
-							nameTokens = name.split('\n');
-							name = nameTokens[nameTokens.length - 1].trim();
+						case ts.SyntaxKind.MethodDeclaration:
+							let nodeAsMethodDeclaration = node as ts.MethodDeclaration;
+							tokens.push({
+								name: getEscapedTextOfIdentifierOrLiteral(nodeAsMethodDeclaration.name) || '{}',
+								kind: CodeOutlineTokenKind.Method,
+								ordinal: ordinal,
+								line: line,
+								indentAmount: indentation
+							})
+							break;
+						case ts.SyntaxKind.FunctionExpression:
+						case ts.SyntaxKind.FunctionDeclaration:
+							let nodeAsFunctionDeclaration = node as ts.FunctionExpression;
+							tokens.push({
+								name: getEscapedTextOfIdentifierOrLiteral(nodeAsFunctionDeclaration.name) || name || '{}',
+								kind: isMethodKind ? CodeOutlineTokenKind.Method : CodeOutlineTokenKind.Function,
+								ordinal: ordinal,
+								line: line,
+								indentAmount: indentation
+							})
+							break;
+						case ts.SyntaxKind.GetAccessor:
+							tokens.push({
+								name: getEscapedTextOfIdentifierOrLiteral(node.name) || '()',
+								kind: CodeOutlineTokenKind.Get,
+								ordinal: ordinal,
+								line: line,
+								indentAmount: indentation
+							})
+							break;
+						case ts.SyntaxKind.SetAccessor:
+							tokens.push({
+								name: getEscapedTextOfIdentifierOrLiteral(node.name) || '()',
+								kind: CodeOutlineTokenKind.Set,
+								ordinal: ordinal,
+								line: line,
+								indentAmount: indentation
+							})
+							break;
+						case ts.SyntaxKind.ArrowFunction:
+							tokens.push({
+								name: getEscapedTextOfIdentifierOrLiteral(node.name) || name || '() => {}',
+								kind: CodeOutlineTokenKind.Function,
+								ordinal: ordinal,
+								line: line,
+								indentAmount: indentation
+							})
+							break;
+						default:
 							break;
 					}
 				}
-			}
 
-			switch (methodNode.kind) {
-				case ts.SyntaxKind.Constructor:
-					tokens.push({
-						name: 'constructor ()',
-						kind: CodeOutlineTokenKind.Constructor,
-						ordinal: ordinal,
-						line: line,
-						indentAmount: indentation
-					})
-					break;
-				case ts.SyntaxKind.MethodDeclaration:
-				case ts.SyntaxKind.MethodSignature:
-					tokens.push({
-						name: (node.name && node.name.escapedText) || '{}',
-						kind: CodeOutlineTokenKind.Method,
-						ordinal: ordinal,
-						line: line,
-						indentAmount: indentation
-					})
-					break;
-				case ts.SyntaxKind.FunctionExpression:
-				case ts.SyntaxKind.FunctionDeclaration:
-					tokens.push({
-						name: (node.name && node.name.escapedText) || name || '{}',
-						kind: isMethodKind ? CodeOutlineTokenKind.Method : CodeOutlineTokenKind.Function,
-						ordinal: ordinal,
-						line: line,
-						indentAmount: indentation
-					})
-					break;
-				case ts.SyntaxKind.GetAccessor:
-					tokens.push({
-						name: (node.name && node.name.escapedText) || '()',
-						kind: CodeOutlineTokenKind.Get,
-						ordinal: ordinal,
-						line: line,
-						indentAmount: indentation
-					})
-					break;
-				case ts.SyntaxKind.SetAccessor:
-					tokens.push({
-						name: (node.name && node.name.escapedText) || '()',
-						kind: CodeOutlineTokenKind.Set,
-						ordinal: ordinal,
-						line: line,
-						indentAmount: indentation
-					})
-					break;
-				case ts.SyntaxKind.ArrowFunction:
-					tokens.push({
-						name: (node.name && node.name.escapedText) || name || '() => {}',
-						kind: CodeOutlineTokenKind.Function,
-						ordinal: ordinal,
-						line: line,
-						indentAmount: indentation
-					})
-					break;
-				default:
-					break;
-			}
-		}
-
-		function buildOutline(node) {
-			let didIndent = false;
-			switch (node.kind) {
-				case ts.SyntaxKind.ObjectLiteralExpression:
-					if (extractLiteral(node)) {
-						indentation += 1;
-						didIndent = true;
+				const buildOutline = function (node: ts.Node): void {
+					let didIndent = false;
+					switch (node.kind) {
+						case ts.SyntaxKind.ObjectLiteralExpression:
+							if (extractLiteral(node as ts.ObjectLiteralExpression)) {
+								indentation += 1;
+								didIndent = true;
+							}
+							break;
+						case ts.SyntaxKind.ClassExpression:
+						case ts.SyntaxKind.ClassDeclaration:
+							extractClass(node as ts.ClassDeclaration);
+							indentation += 1;
+							didIndent = true;
+							break;
+						case ts.SyntaxKind.MethodDeclaration:
+						case ts.SyntaxKind.MethodSignature:
+						case ts.SyntaxKind.FunctionDeclaration:
+						case ts.SyntaxKind.FunctionExpression:
+						case ts.SyntaxKind.GetAccessor:
+						case ts.SyntaxKind.SetAccessor:
+						case ts.SyntaxKind.Constructor:
+						case ts.SyntaxKind.ArrowFunction:
+							extractMethod(node as ts.FunctionLikeDeclaration);
+							indentation += 1;
+							didIndent = true;
+							break;
+						default:
+							break;
 					}
-					break;
-				case ts.SyntaxKind.ClassExpression:
-				case ts.SyntaxKind.ClassDeclaration:
-					extractClass(node);
-					indentation += 1;
-					didIndent = true;
-					break;
-				case ts.SyntaxKind.MethodDeclaration:
-				case ts.SyntaxKind.MethodSignature:
-				case ts.SyntaxKind.FunctionDeclaration:
-				case ts.SyntaxKind.FunctionExpression:
-				case ts.SyntaxKind.GetAccessor:
-				case ts.SyntaxKind.SetAccessor:
-				case ts.SyntaxKind.Constructor:
-				case ts.SyntaxKind.ArrowFunction:
-					extractMethod(node);
-					indentation += 1;
-					didIndent = true;
-					break;
-				default:
-					break;
+
+					ts.forEachChild(node, buildOutline);
+					if (didIndent) indentation -= 1;
+				}
+
+				buildOutline(currentFile);
 			}
-
-			ts.forEachChild(node, buildOutline);
-			if (didIndent) indentation -= 1;
 		}
-
-		buildOutline(currentFile);
-
 		return tokens;
 	}
 	getCodeFixesAtPosition(fileName: string, start: number, end: number, errorCodes: number[], formatOptions: ts.FormatCodeOptions): Promise<ReadonlyArray<ts.CodeFixAction>> {
