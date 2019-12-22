@@ -2,6 +2,7 @@
   "compilerOptions": {
     "module": "esnext",
     "moduleResolution": "node",
+    "declaration": true,
     "outDir": "../release/esm",
     "target": "es5",
     "lib": [
@@ -11,10 +12,7 @@
       "es2015.iterable",
       "es2015.promise"
     ],
-    "baseUrl": "",
-    "paths": {
-      "vs/basic-languages/*": ["../node_modules/monaco-languages/release/dev/*"]
-    }
+    "strict": true
   },
   "include": [
     "**/*.ts"

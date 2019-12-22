@@ -30,15 +30,14 @@ export class LanguageServiceDefaultsImpl implements monaco.languages.typescript.
 	private _onDidExtraLibsChange = new Emitter<void>();
 
 	private _extraLibs: IExtraLibs;
-	private _workerMaxIdleTime: number;
 	private _eagerModelSync: boolean;
-	private _compilerOptions: monaco.languages.typescript.CompilerOptions;
-	private _diagnosticsOptions: monaco.languages.typescript.DiagnosticsOptions;
+	private _compilerOptions!: monaco.languages.typescript.CompilerOptions;
+	private _diagnosticsOptions!: monaco.languages.typescript.DiagnosticsOptions;
 	private _onDidExtraLibsChangeTimeout: number;
 
 	constructor(langualgeId: string, compilerOptions: monaco.languages.typescript.CompilerOptions, diagnosticsOptions: monaco.languages.typescript.DiagnosticsOptions) {
 		this._extraLibs = Object.create(null);
-		this._workerMaxIdleTime = 2 * 60 * 1000;
+		this._eagerModelSync = false;
 		this.setCompilerOptions(compilerOptions);
 		this.setDiagnosticsOptions(diagnosticsOptions);
 		this._onDidExtraLibsChangeTimeout = -1;
@@ -56,9 +55,12 @@ export class LanguageServiceDefaultsImpl implements monaco.languages.typescript.
 		return this._extraLibs;
 	}
 
-	addExtraLib(content: string, filePath?: string): IDisposable {
-		if (typeof filePath === 'undefined') {
+	addExtraLib(content: string, _filePath?: string): IDisposable {
+		let filePath: string;
+		if (typeof _filePath === 'undefined') {
 			filePath = `ts:extralib-${Math.random().toString(36).substring(2, 15)}`;
+		} else {
+			filePath = _filePath;
 		}
 
 		if (this._extraLibs[filePath] && this._extraLibs[filePath].content === content) {
@@ -95,6 +97,24 @@ export class LanguageServiceDefaultsImpl implements monaco.languages.typescript.
 		};
 	}
 
+	setExtraLibs(libs: { content: string; filePath?: string }[]): void {
+		// clear out everything
+		this._extraLibs = Object.create(null);
+
+		if (libs && libs.length > 0) {
+			for (const lib of libs) {
+				const filePath = lib.filePath || `ts:extralib-${Math.random().toString(36).substring(2, 15)}`;
+				const content = lib.content;
+				this._extraLibs[filePath] = {
+					content: content,
+					version: 1
+				};
+			}
+		}
+
+		this._fireOnDidExtraLibsChangeSoon();
+	}
+
 	private _fireOnDidExtraLibsChangeSoon(): void {
 		if (this._onDidExtraLibsChangeTimeout !== -1) {
 			// already scheduled
@@ -125,13 +145,6 @@ export class LanguageServiceDefaultsImpl implements monaco.languages.typescript.
 	}
 
 	setMaximumWorkerIdleTime(value: number): void {
-		// doesn't fire an event since no
-		// worker restart is required here
-		this._workerMaxIdleTime = value;
-	}
-
-	getWorkerMaxIdleTime() {
-		return this._workerMaxIdleTime;
 	}
 
 	setEagerModelSync(value: boolean) {
