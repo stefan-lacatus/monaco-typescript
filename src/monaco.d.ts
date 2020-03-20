@@ -395,5 +395,5 @@ declare module monaco.languages.typescript {
     export var getLanguageDefaults: (languageName: string) => LanguageServiceDefaults;
 }
 
-declare module 'vs/basic-languages/javascript/javascript';
-declare module 'vs/basic-languages/typescript/typescript';
+declare module 'monaco-languages/release/esm/typescript/typescript';
+declare module 'monaco-languages/release/esm/javascript/javascript';
