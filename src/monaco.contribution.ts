@@ -5,8 +5,8 @@
 'use strict';
 
 import * as mode from './tsMode';
-import * as tsDefinitions from 'monaco-languages/release/esm/typescript/typescript';
-import * as jsDefinitions from 'monaco-languages/release/esm/javascript/javascript';
+import * as tsDefinitions from 'vs/basic-languages/typescript/typescript';
+import * as jsDefinitions from 'vs/basic-languages/javascript/javascript';
 import { typescriptVersion } from './lib/typescriptServicesMetadata'; // do not import the whole typescriptServices here
 
 import Emitter = monaco.Emitter;
