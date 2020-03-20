@@ -261,6 +261,7 @@ export class DiagnosticsAdapter extends Adapter {
 // --- suggest ------
 
 interface MyCompletionItem extends monaco.languages.CompletionItem {
+	label: string;
 	uri: Uri;
 	position: Position;
 }
@@ -690,7 +691,7 @@ export class FormatOnTypeAdapter extends FormatHelper implements monaco.language
 
 export class CodeActionAdaptor extends FormatHelper implements monaco.languages.CodeActionProvider {
 
-	public async provideCodeActions(model: monaco.editor.ITextModel, range: Range, context: monaco.languages.CodeActionContext, token: CancellationToken): Promise<monaco.languages.CodeActionList | undefined> {
+	public async provideCodeActions(model: monaco.editor.ITextModel, range: Range, context: monaco.languages.CodeActionContext, token: CancellationToken): Promise<monaco.languages.CodeActionList> {
 		const resource = model.uri;
 		const start = model.getOffsetAt({ lineNumber: range.startLineNumber, column: range.startColumn });
 		const end = model.getOffsetAt({ lineNumber: range.endLineNumber, column: range.endColumn });
@@ -700,7 +701,7 @@ export class CodeActionAdaptor extends FormatHelper implements monaco.languages.
 		const codeFixes = await worker.getCodeFixesAtPosition(resource.toString(), start, end, errorCodes, formatOptions);
 
 		if (!codeFixes || model.isDisposed()) {
-			return;
+			return { actions: [], dispose:() => {} };
 		}
 
 		const actions = codeFixes.filter(fix => {
@@ -718,13 +719,18 @@ export class CodeActionAdaptor extends FormatHelper implements monaco.languages.
 
 
 	private _tsCodeFixActionToMonacoCodeAction(model: monaco.editor.ITextModel, context: monaco.languages.CodeActionContext, codeFix: ts.CodeFixAction): monaco.languages.CodeAction {
-		const edits: monaco.languages.ResourceTextEdit[] = codeFix.changes.map(edit => ({
-			resource: model.uri,
-			edits: edit.textChanges.map(tc => ({
-				range: this._textSpanToRange(model, tc.span),
-				text: tc.newText
-			}))
-		}));
+		const edits: monaco.languages.WorkspaceTextEdit[] = [];
+		for (const change of codeFix.changes) {
+			for (const textChange of change.textChanges) {
+				edits.push({
+					resource: model.uri,
+					edit: {
+						range: this._textSpanToRange(model, textChange.span),
+						text: textChange.newText
+					}
+				});
+			}
+		}
 
 		const action: monaco.languages.CodeAction = {
 			title: codeFix.description,
@@ -763,22 +769,14 @@ export class RenameAdapter extends Adapter implements monaco.languages.RenamePro
 			return;
 		}
 
-		const fileNameToResourceTextEditMap: { [fileName: string]: monaco.languages.ResourceTextEdit } = {};
-
-		const edits: monaco.languages.ResourceTextEdit[] = [];
+		const edits: monaco.languages.WorkspaceTextEdit[] = [];
 		for (const renameLocation of renameLocations) {
-			if (!(renameLocation.fileName in fileNameToResourceTextEditMap)) {
-				const resourceTextEdit = {
-					edits: [],
-					resource: monaco.Uri.parse(renameLocation.fileName)
-				};
-				fileNameToResourceTextEditMap[renameLocation.fileName] = resourceTextEdit;
-				edits.push(resourceTextEdit);
-			}
-
-			fileNameToResourceTextEditMap[renameLocation.fileName].edits.push({
-				range: this._textSpanToRange(model, renameLocation.textSpan),
-				text: newName
+			edits.push({
+				resource: monaco.Uri.parse(renameLocation.fileName),
+				edit: {
+					range: this._textSpanToRange(model, renameLocation.textSpan),
+					text: newName
+				}
 			});
 		}
 

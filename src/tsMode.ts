@@ -11,7 +11,7 @@ import * as languageFeatures from './languageFeatures';
 
 import Uri = monaco.Uri;
 
-let scriptWorkerMap: { [name: string]: (first: Uri, ...more: Uri[]) => Promise<TypeScriptWorker> } = {};
+let scriptWorkerMap: { [name: string]: (...uris: Uri[]) => Promise<TypeScriptWorker> } = {};
 
 export function setupNamedLanguage(languageName: string, isTypescript: boolean, defaults: LanguageServiceDefaultsImpl): void {
 	scriptWorkerMap[languageName + "Worker"] = setupMode(
@@ -20,7 +20,7 @@ export function setupNamedLanguage(languageName: string, isTypescript: boolean, 
 	);
 }
 
-export function getNamedLanguageWorker(languageName: string): Promise<(first: Uri, ...more: Uri[]) => Promise<TypeScriptWorker>> {
+export function getNamedLanguageWorker(languageName: string): Promise<(...uris: Uri[]) => Promise<TypeScriptWorker>> {
 	let workerName = languageName + "Worker";
 	return new Promise((resolve, reject) => {
 		if (!scriptWorkerMap[workerName]) {
@@ -31,11 +31,11 @@ export function getNamedLanguageWorker(languageName: string): Promise<(first: Ur
 	});
 }
 
-function setupMode(defaults: LanguageServiceDefaultsImpl, modeId: string): (first: Uri, ...more: Uri[]) => Promise<TypeScriptWorker> {
+function setupMode(defaults: LanguageServiceDefaultsImpl, modeId: string): (...uris: Uri[]) => Promise<TypeScriptWorker> {
 
 	const client = new WorkerManager(modeId, defaults);
-	const worker = (first: Uri, ...more: Uri[]): Promise<TypeScriptWorker> => {
-		return client.getLanguageServiceWorker(...[first].concat(more));
+	const worker = (...uris: Uri[]): Promise<TypeScriptWorker> => {
+		return client.getLanguageServiceWorker(...uris);
 	};
 
 	monaco.languages.registerCompletionItemProvider(modeId, new languageFeatures.SuggestAdapter(worker));

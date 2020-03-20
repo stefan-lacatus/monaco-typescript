@@ -236,15 +236,15 @@ setupNamedLanguage({
 	mimetypes: ['text/javascript'],
 }, false, true);
 
-function getTypeScriptWorker(): Promise<any> {
+function getTypeScriptWorker(): Promise<(...uris: monaco.Uri[]) => Promise<monaco.languages.typescript.TypeScriptWorker>> {
 	return getLanguageWorker("typescript");
 }
 
-function getJavaScriptWorker(): Promise<any> {
+function getJavaScriptWorker(): Promise<(...uris: monaco.Uri[]) => Promise<monaco.languages.typescript.TypeScriptWorker>> {
 	return getLanguageWorker("javascript");
 }
 
-function getLanguageWorker(languageName: string): Promise<any> {
+function getLanguageWorker(languageName: string): Promise<(...uris: monaco.Uri[]) => Promise<monaco.languages.typescript.TypeScriptWorker>> {
 	return getMode().then(mode => mode.getNamedLanguageWorker(languageName));
 }
 

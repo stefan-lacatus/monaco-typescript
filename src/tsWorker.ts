@@ -5,19 +5,19 @@
 'use strict';
 
 import * as ts from './lib/typescriptServices';
-import { lib_dts, lib_es6_dts } from './lib/lib';
+import { lib_es5_dts, lib_es2015_bundled_dts } from './lib/lib';
 import { IExtraLibs } from './monaco.contribution';
 
 import IWorkerContext = monaco.worker.IWorkerContext;
 
-const DEFAULT_LIB = {
+const DEFAULT_ES5_LIB = {
 	NAME: 'defaultLib:lib.d.ts',
-	CONTENTS: lib_dts
+	CONTENTS: lib_es5_dts
 };
 
-const ES6_LIB = {
-	NAME: 'defaultLib:lib.es6.d.ts',
-	CONTENTS: lib_es6_dts
+const ES2015_LIB = {
+	NAME: 'defaultLib:lib.es2015.d.ts',
+	CONTENTS: lib_es2015_bundled_dts
 };
 
 interface CodeOutlineToken {
@@ -38,7 +38,7 @@ export enum CodeOutlineTokenKind {
 	Set = 'Set'
 }
 
-export class TypeScriptWorker implements ts.LanguageServiceHost {
+export class TypeScriptWorker implements ts.LanguageServiceHost, monaco.languages.typescript.TypeScriptWorker {
 
 	// --- model sync -----------------------
 
@@ -87,7 +87,11 @@ export class TypeScriptWorker implements ts.LanguageServiceHost {
 		return '';
 	}
 
-	getScriptSnapshot(fileName: string): ts.IScriptSnapshot | undefined {
+	getScriptText(fileName: string): Promise<string | undefined> {
+		return Promise.resolve(this._getScriptText(fileName));
+	}
+
+	_getScriptText(fileName: string): string | undefined {
 		let text: string;
 		let model = this._getModel(fileName);
 		if (model) {
@@ -98,11 +102,20 @@ export class TypeScriptWorker implements ts.LanguageServiceHost {
 			// extra lib
 			text = this._extraLibs[fileName].content;
 
-		} else if (fileName === DEFAULT_LIB.NAME) {
-			text = DEFAULT_LIB.CONTENTS;
-		} else if (fileName === ES6_LIB.NAME) {
-			text = ES6_LIB.CONTENTS;
+		} else if (fileName === DEFAULT_ES5_LIB.NAME) {
+			text = DEFAULT_ES5_LIB.CONTENTS;
+		} else if (fileName === ES2015_LIB.NAME) {
+			text = ES2015_LIB.CONTENTS;
 		} else {
+			return;
+		}
+
+		return text;
+	}
+
+	getScriptSnapshot(fileName: string): ts.IScriptSnapshot | undefined {
+		const text = this._getScriptText(fileName);
+		if (!text) {
 			return;
 		}
 
@@ -132,7 +145,7 @@ export class TypeScriptWorker implements ts.LanguageServiceHost {
 
 	getDefaultLibFileName(options: ts.CompilerOptions): string {
 		// TODO@joh support lib.es7.d.ts
-		return (options.target || ts.ScriptTarget.ES5) <= ts.ScriptTarget.ES5 ? DEFAULT_LIB.NAME : ES6_LIB.NAME;
+		return (options.target || ts.ScriptTarget.ES2015) < ts.ScriptTarget.ES2015 ? DEFAULT_ES5_LIB.NAME : ES2015_LIB.NAME;
 	}
 
 	isDefaultLibFileName(fileName: string): boolean {
@@ -141,7 +154,7 @@ export class TypeScriptWorker implements ts.LanguageServiceHost {
 
 	// --- language features
 
-	private static clearFiles(diagnostics: ts.Diagnostic[]) {
+	private static clearFiles(diagnostics: ts.Diagnostic[]): monaco.languages.typescript.Diagnostic[] {
 		// Clear the `file` field, which cannot be JSON'yfied because it
 		// contains cyclic data structures.
 		diagnostics.forEach(diag => {
@@ -151,30 +164,27 @@ export class TypeScriptWorker implements ts.LanguageServiceHost {
 				related.forEach(diag2 => diag2.file = undefined);
 			}
 		});
+		return <monaco.languages.typescript.Diagnostic[]>diagnostics;
 	}
 
-	getSyntacticDiagnostics(fileName: string): Promise<ts.Diagnostic[]> {
+	getSyntacticDiagnostics(fileName: string): Promise<monaco.languages.typescript.Diagnostic[]> {
 		const diagnostics = this._languageService.getSyntacticDiagnostics(fileName);
-		TypeScriptWorker.clearFiles(diagnostics);
-		return Promise.resolve(diagnostics);
+		return Promise.resolve(TypeScriptWorker.clearFiles(diagnostics));
 	}
 
-	getSemanticDiagnostics(fileName: string): Promise<ts.Diagnostic[]> {
+	getSemanticDiagnostics(fileName: string): Promise<monaco.languages.typescript.Diagnostic[]> {
 		const diagnostics = this._languageService.getSemanticDiagnostics(fileName);
-		TypeScriptWorker.clearFiles(diagnostics);
-		return Promise.resolve(diagnostics);
+		return Promise.resolve(TypeScriptWorker.clearFiles(diagnostics));
 	}
 
-	getSuggestionDiagnostics(fileName: string): Promise<ts.DiagnosticWithLocation[]> {
+	getSuggestionDiagnostics(fileName: string): Promise<monaco.languages.typescript.Diagnostic[]> {
 		const diagnostics = this._languageService.getSuggestionDiagnostics(fileName);
-		TypeScriptWorker.clearFiles(diagnostics);
-		return Promise.resolve(diagnostics);
+		return Promise.resolve(TypeScriptWorker.clearFiles(diagnostics));
 	}
 
-	getCompilerOptionsDiagnostics(fileName: string): Promise<ts.Diagnostic[]> {
+	getCompilerOptionsDiagnostics(fileName: string): Promise<monaco.languages.typescript.Diagnostic[]> {
 		const diagnostics = this._languageService.getCompilerOptionsDiagnostics();
-		TypeScriptWorker.clearFiles(diagnostics);
-		return Promise.resolve(diagnostics);
+		return Promise.resolve(TypeScriptWorker.clearFiles(diagnostics));
 	}
 
 	getCompletionsAtPosition(fileName: string, position: number): Promise<ts.CompletionInfo | undefined> {
@@ -221,12 +231,12 @@ export class TypeScriptWorker implements ts.LanguageServiceHost {
 		return Promise.resolve(this._languageService.getFormattingEditsAfterKeystroke(fileName, postion, ch, options));
 	}
 
-	findRenameLocations(fileName: string, positon: number, findInStrings: boolean, findInComments: boolean, providePrefixAndSuffixTextForRename: boolean): Promise<readonly ts.RenameLocation[] | undefined> {
-		return Promise.resolve(this._languageService.findRenameLocations(fileName, positon, findInStrings, findInComments, providePrefixAndSuffixTextForRename));
+	findRenameLocations(fileName: string, position: number, findInStrings: boolean, findInComments: boolean, providePrefixAndSuffixTextForRename: boolean): Promise<readonly ts.RenameLocation[] | undefined> {
+		return Promise.resolve(this._languageService.findRenameLocations(fileName, position, findInStrings, findInComments, providePrefixAndSuffixTextForRename));
 	}
 
-	getRenameInfo(fileName: string, positon: number, options: ts.RenameInfoOptions): Promise<ts.RenameInfo> {
-		return Promise.resolve(this._languageService.getRenameInfo(fileName, positon, options));
+	getRenameInfo(fileName: string, position: number, options: ts.RenameInfoOptions): Promise<ts.RenameInfo> {
+		return Promise.resolve(this._languageService.getRenameInfo(fileName, position, options));
 	}
 
 	getEmitOutput(fileName: string): Promise<ts.EmitOutput> {
