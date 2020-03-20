@@ -11,11 +11,7 @@
       "es2015.iterable",
       "es2015.promise"
     ],
-    "strict": true,
-    "baseUrl": "",
-    "paths": {
-      "vs/basic-languages/*": ["../node_modules/monaco-languages/release/dev/*"]
-    }
+    "strict": true
   },
   "include": [
     "**/*.ts"
