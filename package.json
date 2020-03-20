@@ -1,5 +1,5 @@
 {
-  "name": "monaco-typescript",
+  "name": "@placatus/monaco-typescript",
   "version": "3.7.0",
   "description": "TypeScript and JavaScript language support for Monaco Editor",
   "scripts": {
@@ -8,8 +8,7 @@
     "compile": "mrmdir ./release && npm run compile-amd && npm run compile-esm",
     "watch": "tsc -p ./src --watch",
     "prepublishOnly": "npm run compile && node ./scripts/bundle && mcopy ./src/monaco.d.ts ./release/monaco.d.ts",
-    "import-typescript": "node ./scripts/importTypescript",
-    "prepare": "npm run prepublishOnly"
+    "import-typescript": "node ./scripts/importTypescript"
   },
   "author": "Microsoft Corporation",
   "license": "MIT",
