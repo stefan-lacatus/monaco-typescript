@@ -37,7 +37,7 @@ function bundleOne(moduleId, exclude) {
 		exclude: exclude,
 		paths: {
 			'vs/language/typescript': REPO_ROOT + '/release/dev',
-			'vs/basic-languages': REPO_ROOT + '/node_modules/monaco-languages/release/dev'
+			'monaco-languages/release/esm': REPO_ROOT + '/node_modules/monaco-languages/release/dev'
 		},
 		optimize: 'none'
 	}, function(buildResponse) {
