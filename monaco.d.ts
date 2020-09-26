@@ -436,6 +436,15 @@ declare namespace monaco.languages.typescript {
 		getEagerModelSync(): boolean;
 	}
 	export const typescriptVersion: string;
-	export const typescriptDefaults: LanguageServiceDefaultsImpl;
-	export const javascriptDefaults: LanguageServiceDefaultsImpl;
+	export function getTypeScriptWorker(): Promise<(...uris: Uri[]) => Promise<TypeScriptWorker>>;
+	export function getJavaScriptWorker(): Promise<(...uris: Uri[]) => Promise<TypeScriptWorker>>;
+	export function getLanguageWorker(
+		languageName: string
+	): Promise<(...uris: Uri[]) => Promise<TypeScriptWorker>>;
+	export function getLanguageDefaults(languageName: string): LanguageServiceDefaultsImpl;
+	export function setupNamedLanguage(
+		languageDefinition: languages.ILanguageExtensionPoint,
+		isTypescript: boolean,
+		registerLanguage?: boolean
+	): void;
 }

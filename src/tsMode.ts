@@ -33,14 +33,6 @@ export function getNamedLanguageWorker(
 	});
 }
 
-export function setupTypeScript(defaults: LanguageServiceDefaults): void {
-	setupNamedLanguage('typescript', true, defaults);
-}
-
-export function setupJavaScript(defaults: LanguageServiceDefaults): void {
-	setupNamedLanguage('javascript', false, defaults);
-}
-
 function setupMode(
 	defaults: LanguageServiceDefaults,
 	modeId: string

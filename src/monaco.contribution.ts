@@ -614,28 +614,26 @@ class LanguageServiceDefaultsImpl implements LanguageServiceDefaults {
 
 export const typescriptVersion: string = tsversion;
 
-export const typescriptDefaults = new LanguageServiceDefaultsImpl(
-	'typescript',
-	{ allowNonTsExtensions: true, target: ScriptTarget.Latest },
-	{ noSemanticValidation: false, noSyntaxValidation: false },
-	{}
-);
-
-export const javascriptDefaults = new LanguageServiceDefaultsImpl(
-	'javascript',
-	{ allowNonTsExtensions: true, allowJs: true, target: ScriptTarget.Latest },
-	{ noSemanticValidation: true, noSyntaxValidation: false },
-	{}
-);
-
 const languageDefaults: { [name: string]: LanguageServiceDefaultsImpl } = {};
+const languageDefaultOptions = {
+	javascript: {
+		compilerOptions: { allowNonTsExtensions: true, allowJs: true, target: ScriptTarget.Latest },
+		diagnosticsOptions: { noSemanticValidation: true, noSyntaxValidation: false },
+		workerOptions: {}
+	},
+	typescript: {
+		compilerOptions: { allowNonTsExtensions: true, target: ScriptTarget.Latest },
+		diagnosticsOptions: { noSemanticValidation: false, noSyntaxValidation: false },
+		workerOptions: {}
+	}
+};
 
 function setupLanguageServiceDefaults(languageId: string, isTypescript: boolean) {
-	const languageOptions = isTypescript ? typescriptDefaults : javascriptDefaults;
+	const languageOptions = languageDefaultOptions[isTypescript ? 'typescript' : 'javascript'];
 	languageDefaults[languageId] = new LanguageServiceDefaultsImpl(
 		languageId,
-		languageOptions.getCompilerOptions(),
-		languageOptions.getDiagnosticsOptions(),
+		languageOptions.compilerOptions,
+		languageOptions.diagnosticsOptions,
 		{}
 	);
 }
@@ -648,7 +646,7 @@ setupNamedLanguage(
 		mimetypes: ['text/typescript']
 	},
 	true,
-	true
+	false
 );
 
 setupNamedLanguage(
@@ -661,28 +659,28 @@ setupNamedLanguage(
 		mimetypes: ['text/javascript']
 	},
 	false,
-	true
+	false
 );
 
-function getTypeScriptWorker(): Promise<(...uris: Uri[]) => Promise<TypeScriptWorker>> {
+export function getTypeScriptWorker(): Promise<(...uris: Uri[]) => Promise<TypeScriptWorker>> {
 	return getLanguageWorker('typescript');
 }
 
-function getJavaScriptWorker(): Promise<(...uris: Uri[]) => Promise<TypeScriptWorker>> {
+export function getJavaScriptWorker(): Promise<(...uris: Uri[]) => Promise<TypeScriptWorker>> {
 	return getLanguageWorker('javascript');
 }
 
-function getLanguageWorker(
+export function getLanguageWorker(
 	languageName: string
 ): Promise<(...uris: Uri[]) => Promise<TypeScriptWorker>> {
 	return getMode().then((mode) => mode.getNamedLanguageWorker(languageName));
 }
 
-function getLanguageDefaults(languageName: string): LanguageServiceDefaultsImpl {
+export function getLanguageDefaults(languageName: string): LanguageServiceDefaultsImpl {
 	return languageDefaults[languageName];
 }
 
-function setupNamedLanguage(
+export function setupNamedLanguage(
 	languageDefinition: languages.ILanguageExtensionPoint,
 	isTypescript: boolean,
 	registerLanguage?: boolean
@@ -716,12 +714,12 @@ function setupNamedLanguage(
 	ScriptTarget,
 	ModuleResolutionKind,
 	typescriptVersion,
-	typescriptDefaults,
-	javascriptDefaults,
+	javascriptDefaults: getLanguageDefaults('javascript'),
+	typescriptDefaults: getLanguageDefaults('typescript'),
 	getTypeScriptWorker,
 	getJavaScriptWorker,
-	getLanguageWorker: getLanguageWorker,
-	setupNamedLanguage: setupNamedLanguage
+	getLanguageWorker,
+	setupNamedLanguage
 };
 
 // --- Registration to monaco editor ---
