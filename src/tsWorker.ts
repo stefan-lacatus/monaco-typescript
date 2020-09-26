@@ -5,20 +5,13 @@
 'use strict';
 
 import * as ts from './lib/typescriptServices';
-import { lib_es5_dts, lib_es2015_bundled_dts } from './lib/lib';
-import { IExtraLibs } from './monaco.contribution';
-
-import IWorkerContext = monaco.worker.IWorkerContext;
-
-const DEFAULT_ES5_LIB = {
-	NAME: 'defaultLib:lib.d.ts',
-	CONTENTS: lib_es5_dts
-};
-
-const ES2015_LIB = {
-	NAME: 'defaultLib:lib.es2015.d.ts',
-	CONTENTS: lib_es2015_bundled_dts
-};
+import { libFileMap } from './lib/lib';
+import {
+	Diagnostic,
+	IExtraLibs,
+	TypeScriptWorker as ITypeScriptWorker
+} from './monaco.contribution';
+import { worker } from './fillers/monaco-editor-core';
 
 interface CodeOutlineToken {
 	name: string;
@@ -38,16 +31,15 @@ export enum CodeOutlineTokenKind {
 	Set = 'Set'
 }
 
-export class TypeScriptWorker implements ts.LanguageServiceHost, monaco.languages.typescript.TypeScriptWorker {
-
+export class TypeScriptWorker implements ts.LanguageServiceHost, ITypeScriptWorker {
 	// --- model sync -----------------------
 
-	private _ctx: IWorkerContext;
+	private _ctx: worker.IWorkerContext;
 	private _extraLibs: IExtraLibs = Object.create(null);
 	private _languageService = ts.createLanguageService(this);
 	private _compilerOptions: ts.CompilerOptions;
 
-	constructor(ctx: IWorkerContext, createData: ICreateData) {
+	constructor(ctx: worker.IWorkerContext, createData: ICreateData) {
 		this._ctx = ctx;
 		this._compilerOptions = createData.compilerOptions;
 		this._extraLibs = createData.extraLibs;
@@ -60,11 +52,11 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, monaco.language
 	}
 
 	getScriptFileNames(): string[] {
-		let models = this._ctx.getMirrorModels().map(model => model.uri.toString());
+		let models = this._ctx.getMirrorModels().map((model) => model.uri.toString());
 		return models.concat(Object.keys(this._extraLibs));
 	}
 
-	private _getModel(fileName: string): monaco.worker.IMirrorModel | null {
+	private _getModel(fileName: string): worker.IMirrorModel | null {
 		let models = this._ctx.getMirrorModels();
 		for (let i = 0; i < models.length; i++) {
 			if (models[i].uri.toString() === fileName) {
@@ -87,25 +79,24 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, monaco.language
 		return '';
 	}
 
-	getScriptText(fileName: string): Promise<string | undefined> {
-		return Promise.resolve(this._getScriptText(fileName));
+	async getScriptText(fileName: string): Promise<string | undefined> {
+		return this._getScriptText(fileName);
 	}
 
 	_getScriptText(fileName: string): string | undefined {
 		let text: string;
 		let model = this._getModel(fileName);
+		const libizedFileName = 'lib.' + fileName + '.d.ts';
 		if (model) {
 			// a true editor model
 			text = model.getValue();
-
+		} else if (fileName in libFileMap) {
+			text = libFileMap[fileName];
+		} else if (libizedFileName in libFileMap) {
+			text = libFileMap[libizedFileName];
 		} else if (fileName in this._extraLibs) {
 			// extra lib
 			text = this._extraLibs[fileName].content;
-
-		} else if (fileName === DEFAULT_ES5_LIB.NAME) {
-			text = DEFAULT_ES5_LIB.CONTENTS;
-		} else if (fileName === ES2015_LIB.NAME) {
-			text = ES2015_LIB.CONTENTS;
 		} else {
 			return;
 		}
@@ -115,7 +106,7 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, monaco.language
 
 	getScriptSnapshot(fileName: string): ts.IScriptSnapshot | undefined {
 		const text = this._getScriptText(fileName);
-		if (!text) {
+		if (text === undefined) {
 			return;
 		}
 
@@ -129,13 +120,16 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, monaco.language
 	getScriptKind?(fileName: string): ts.ScriptKind {
 		const suffix = fileName.substr(fileName.lastIndexOf('.') + 1);
 		switch (suffix) {
-			case 'ts': return ts.ScriptKind.TS;
-			case 'tsx': return ts.ScriptKind.TSX;
-			case 'js': return ts.ScriptKind.JS;
-			case 'jsx': return ts.ScriptKind.JSX;
-			default: return this.getCompilationSettings().allowJs
-				? ts.ScriptKind.JS
-				: ts.ScriptKind.TS;
+			case 'ts':
+				return ts.ScriptKind.TS;
+			case 'tsx':
+				return ts.ScriptKind.TSX;
+			case 'js':
+				return ts.ScriptKind.JS;
+			case 'jsx':
+				return ts.ScriptKind.JSX;
+			default:
+				return this.getCompilationSettings().allowJs ? ts.ScriptKind.JS : ts.ScriptKind.TS;
 		}
 	}
 
@@ -144,108 +138,225 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, monaco.language
 	}
 
 	getDefaultLibFileName(options: ts.CompilerOptions): string {
-		// TODO@joh support lib.es7.d.ts
-		return (options.target || ts.ScriptTarget.ES2015) < ts.ScriptTarget.ES2015 ? DEFAULT_ES5_LIB.NAME : ES2015_LIB.NAME;
+		switch (options.target) {
+			case 99 /* ESNext */:
+				const esnext = 'lib.esnext.full.d.ts';
+				if (esnext in libFileMap || esnext in this._extraLibs) return esnext;
+			case 7 /* ES2020 */:
+			case 6 /* ES2019 */:
+			case 5 /* ES2018 */:
+			case 4 /* ES2017 */:
+			case 3 /* ES2016 */:
+			case 2 /* ES2015 */:
+			default:
+				// Support a dynamic lookup for the ES20XX version based on the target
+				// which is safe unless TC39 changes their numbering system
+				const eslib = `lib.es${2013 + (options.target || 99)}.full.d.ts`;
+				// Note: This also looks in _extraLibs, If you want
+				// to add support for additional target options, you will need to
+				// add the extra dts files to _extraLibs via the API.
+				if (eslib in libFileMap || eslib in this._extraLibs) {
+					return eslib;
+				}
+
+				return 'lib.es6.d.ts'; // We don't use lib.es2015.full.d.ts due to breaking change.
+			case 1:
+			case 0:
+				return 'lib.d.ts';
+		}
 	}
 
 	isDefaultLibFileName(fileName: string): boolean {
 		return fileName === this.getDefaultLibFileName(this._compilerOptions);
 	}
 
+	async getLibFiles(): Promise<Record<string, string>> {
+		return libFileMap;
+	}
+
 	// --- language features
 
-	private static clearFiles(diagnostics: ts.Diagnostic[]): monaco.languages.typescript.Diagnostic[] {
+	private static clearFiles(diagnostics: ts.Diagnostic[]): Diagnostic[] {
 		// Clear the `file` field, which cannot be JSON'yfied because it
 		// contains cyclic data structures.
-		diagnostics.forEach(diag => {
+		diagnostics.forEach((diag) => {
 			diag.file = undefined;
 			const related = <ts.Diagnostic[]>diag.relatedInformation;
 			if (related) {
-				related.forEach(diag2 => diag2.file = undefined);
+				related.forEach((diag2) => (diag2.file = undefined));
 			}
 		});
-		return <monaco.languages.typescript.Diagnostic[]>diagnostics;
+		return <Diagnostic[]>diagnostics;
 	}
 
-	getSyntacticDiagnostics(fileName: string): Promise<monaco.languages.typescript.Diagnostic[]> {
+	async getSyntacticDiagnostics(fileName: string): Promise<Diagnostic[]> {
 		const diagnostics = this._languageService.getSyntacticDiagnostics(fileName);
-		return Promise.resolve(TypeScriptWorker.clearFiles(diagnostics));
+		return TypeScriptWorker.clearFiles(diagnostics);
 	}
 
-	getSemanticDiagnostics(fileName: string): Promise<monaco.languages.typescript.Diagnostic[]> {
+	async getSemanticDiagnostics(fileName: string): Promise<Diagnostic[]> {
 		const diagnostics = this._languageService.getSemanticDiagnostics(fileName);
-		return Promise.resolve(TypeScriptWorker.clearFiles(diagnostics));
+		return TypeScriptWorker.clearFiles(diagnostics);
 	}
 
-	getSuggestionDiagnostics(fileName: string): Promise<monaco.languages.typescript.Diagnostic[]> {
+	async getSuggestionDiagnostics(fileName: string): Promise<Diagnostic[]> {
 		const diagnostics = this._languageService.getSuggestionDiagnostics(fileName);
-		return Promise.resolve(TypeScriptWorker.clearFiles(diagnostics));
+		return TypeScriptWorker.clearFiles(diagnostics);
 	}
 
-	getCompilerOptionsDiagnostics(fileName: string): Promise<monaco.languages.typescript.Diagnostic[]> {
+	async getCompilerOptionsDiagnostics(fileName: string): Promise<Diagnostic[]> {
 		const diagnostics = this._languageService.getCompilerOptionsDiagnostics();
-		return Promise.resolve(TypeScriptWorker.clearFiles(diagnostics));
+		return TypeScriptWorker.clearFiles(diagnostics);
 	}
 
-	getCompletionsAtPosition(fileName: string, position: number): Promise<ts.CompletionInfo | undefined> {
-		return Promise.resolve(this._languageService.getCompletionsAtPosition(fileName, position, undefined));
+	async getCompletionsAtPosition(
+		fileName: string,
+		position: number
+	): Promise<ts.CompletionInfo | undefined> {
+		return this._languageService.getCompletionsAtPosition(fileName, position, undefined);
 	}
 
-	getCompletionEntryDetails(fileName: string, position: number, entry: string): Promise<ts.CompletionEntryDetails | undefined> {
-		return Promise.resolve(this._languageService.getCompletionEntryDetails(fileName, position, entry, undefined, undefined, undefined));
+	async getCompletionEntryDetails(
+		fileName: string,
+		position: number,
+		entry: string
+	): Promise<ts.CompletionEntryDetails | undefined> {
+		return this._languageService.getCompletionEntryDetails(
+			fileName,
+			position,
+			entry,
+			undefined,
+			undefined,
+			undefined
+		);
 	}
 
-	getSignatureHelpItems(fileName: string, position: number): Promise<ts.SignatureHelpItems | undefined> {
-		return Promise.resolve(this._languageService.getSignatureHelpItems(fileName, position, undefined));
+	async getSignatureHelpItems(
+		fileName: string,
+		position: number
+	): Promise<ts.SignatureHelpItems | undefined> {
+		return this._languageService.getSignatureHelpItems(fileName, position, undefined);
 	}
 
-	getQuickInfoAtPosition(fileName: string, position: number): Promise<ts.QuickInfo | undefined> {
-		return Promise.resolve(this._languageService.getQuickInfoAtPosition(fileName, position));
+	async getQuickInfoAtPosition(
+		fileName: string,
+		position: number
+	): Promise<ts.QuickInfo | undefined> {
+		return this._languageService.getQuickInfoAtPosition(fileName, position);
 	}
 
-	getOccurrencesAtPosition(fileName: string, position: number): Promise<ReadonlyArray<ts.ReferenceEntry> | undefined> {
-		return Promise.resolve(this._languageService.getOccurrencesAtPosition(fileName, position));
+	async getOccurrencesAtPosition(
+		fileName: string,
+		position: number
+	): Promise<ReadonlyArray<ts.ReferenceEntry> | undefined> {
+		return this._languageService.getOccurrencesAtPosition(fileName, position);
 	}
 
-	getDefinitionAtPosition(fileName: string, position: number): Promise<ReadonlyArray<ts.DefinitionInfo> | undefined> {
-		return Promise.resolve(this._languageService.getDefinitionAtPosition(fileName, position));
+	async getDefinitionAtPosition(
+		fileName: string,
+		position: number
+	): Promise<ReadonlyArray<ts.DefinitionInfo> | undefined> {
+		return this._languageService.getDefinitionAtPosition(fileName, position);
 	}
 
-	getReferencesAtPosition(fileName: string, position: number): Promise<ts.ReferenceEntry[] | undefined> {
-		return Promise.resolve(this._languageService.getReferencesAtPosition(fileName, position));
+	async getReferencesAtPosition(
+		fileName: string,
+		position: number
+	): Promise<ts.ReferenceEntry[] | undefined> {
+		return this._languageService.getReferencesAtPosition(fileName, position);
 	}
 
-	getNavigationBarItems(fileName: string): Promise<ts.NavigationBarItem[]> {
-		return Promise.resolve(this._languageService.getNavigationBarItems(fileName));
+	async getNavigationBarItems(fileName: string): Promise<ts.NavigationBarItem[]> {
+		return this._languageService.getNavigationBarItems(fileName);
 	}
 
-	getFormattingEditsForDocument(fileName: string, options: ts.FormatCodeOptions): Promise<ts.TextChange[]> {
-		return Promise.resolve(this._languageService.getFormattingEditsForDocument(fileName, options));
+	async getFormattingEditsForDocument(
+		fileName: string,
+		options: ts.FormatCodeOptions
+	): Promise<ts.TextChange[]> {
+		return this._languageService.getFormattingEditsForDocument(fileName, options);
 	}
 
-	getFormattingEditsForRange(fileName: string, start: number, end: number, options: ts.FormatCodeOptions): Promise<ts.TextChange[]> {
-		return Promise.resolve(this._languageService.getFormattingEditsForRange(fileName, start, end, options));
+	async getFormattingEditsForRange(
+		fileName: string,
+		start: number,
+		end: number,
+		options: ts.FormatCodeOptions
+	): Promise<ts.TextChange[]> {
+		return this._languageService.getFormattingEditsForRange(fileName, start, end, options);
 	}
 
-	getFormattingEditsAfterKeystroke(fileName: string, postion: number, ch: string, options: ts.FormatCodeOptions): Promise<ts.TextChange[]> {
-		return Promise.resolve(this._languageService.getFormattingEditsAfterKeystroke(fileName, postion, ch, options));
+	async getFormattingEditsAfterKeystroke(
+		fileName: string,
+		postion: number,
+		ch: string,
+		options: ts.FormatCodeOptions
+	): Promise<ts.TextChange[]> {
+		return this._languageService.getFormattingEditsAfterKeystroke(fileName, postion, ch, options);
 	}
 
-	findRenameLocations(fileName: string, position: number, findInStrings: boolean, findInComments: boolean, providePrefixAndSuffixTextForRename: boolean): Promise<readonly ts.RenameLocation[] | undefined> {
-		return Promise.resolve(this._languageService.findRenameLocations(fileName, position, findInStrings, findInComments, providePrefixAndSuffixTextForRename));
+	async findRenameLocations(
+		fileName: string,
+		position: number,
+		findInStrings: boolean,
+		findInComments: boolean,
+		providePrefixAndSuffixTextForRename: boolean
+	): Promise<readonly ts.RenameLocation[] | undefined> {
+		return this._languageService.findRenameLocations(
+			fileName,
+			position,
+			findInStrings,
+			findInComments,
+			providePrefixAndSuffixTextForRename
+		);
 	}
 
-	getRenameInfo(fileName: string, position: number, options: ts.RenameInfoOptions): Promise<ts.RenameInfo> {
-		return Promise.resolve(this._languageService.getRenameInfo(fileName, position, options));
+	async getRenameInfo(
+		fileName: string,
+		position: number,
+		options: ts.RenameInfoOptions
+	): Promise<ts.RenameInfo> {
+		return this._languageService.getRenameInfo(fileName, position, options);
 	}
 
-	getEmitOutput(fileName: string): Promise<ts.EmitOutput> {
-		return Promise.resolve(this._languageService.getEmitOutput(fileName));
+	async getEmitOutput(fileName: string): Promise<ts.EmitOutput> {
+		return this._languageService.getEmitOutput(fileName);
 	}
 
-	getPropertiesOrAttributesOf(fileName: string, parentObjects: string[]): { [name: string]: { [name: string]: boolean } } {
+	async getCodeFixesAtPosition(
+		fileName: string,
+		start: number,
+		end: number,
+		errorCodes: number[],
+		formatOptions: ts.FormatCodeOptions
+	): Promise<ReadonlyArray<ts.CodeFixAction>> {
+		const preferences = {};
+		try {
+			return this._languageService.getCodeFixesAtPosition(
+				fileName,
+				start,
+				end,
+				errorCodes,
+				formatOptions,
+				preferences
+			);
+		} catch {
+			return [];
+		}
+	}
+
+	async updateExtraLibs(extraLibs: IExtraLibs): Promise<void> {
+		this._extraLibs = extraLibs;
+	}
+
+	getPropertiesOrAttributesOf(
+		fileName: string,
+		parentObjects: string[]
+	): { [name: string]: { [name: string]: boolean } } {
 		let referencedEntities: { [name: string]: { [name: string]: boolean } } = {};
-		parentObjects.forEach(function (key) { referencedEntities[key] = {}; });
+		parentObjects.forEach(function (key) {
+			referencedEntities[key] = {};
+		});
 		let program = this._languageService.getProgram();
 		if (program) {
 			let currentFile = program.getSourceFile(fileName);
@@ -253,28 +364,40 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, monaco.language
 				let typeChecker = program.getTypeChecker();
 
 				ts.forEachChild(currentFile, function visitNodes(node: ts.Node) {
-					if (ts.isPropertyAccessExpression(node) && referencedEntities[node.expression.getText()]) {
+					if (
+						ts.isPropertyAccessExpression(node) &&
+						referencedEntities[node.expression.getText()]
+					) {
 						// Matches Things.test
 						if (!(node.name.text in referencedEntities[node.expression.getText()])) {
 							referencedEntities[node.expression.getText()][node.name.text] = true;
 						}
-					} else if (ts.isElementAccessExpression(node) && referencedEntities[node.expression.getText()] && node.argumentExpression) {
+					} else if (
+						ts.isElementAccessExpression(node) &&
+						referencedEntities[node.expression.getText()] &&
+						node.argumentExpression
+					) {
 						if (node.argumentExpression.kind == ts.SyntaxKind.Identifier) {
-							if (node.expression.getText() == "Users" && node.argumentExpression.getText() == "principal") {
+							if (
+								node.expression.getText() == 'Users' &&
+								node.argumentExpression.getText() == 'principal'
+							) {
 								// a special case for Users[principal] => replace principal with "Administrator",
 								// since all users have the same properties and functions
-								referencedEntities["Users"]["System"] = true;
+								referencedEntities['Users']['System'] = true;
 							}
 						}
 						if (node.argumentExpression.kind == ts.SyntaxKind.PropertyAccessExpression) {
 							// matches Things[me.property]
 							let type = typeChecker.getTypeAtLocation(node.argumentExpression);
 							if ('value' in type) {
-								referencedEntities[node.expression.getText()][type["value"]] = true;
+								referencedEntities[node.expression.getText()][type['value']] = true;
 							}
 						} else if (ts.isStringLiteral(node.argumentExpression)) {
 							// matches Things["test"]
-							referencedEntities[node.expression.getText()][node.argumentExpression.getText().slice(1, -1)] = true;
+							referencedEntities[node.expression.getText()][
+								node.argumentExpression.getText().slice(1, -1)
+							] = true;
 						}
 					}
 					ts.forEachChild(node, visitNodes);
@@ -288,25 +411,29 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, monaco.language
 		let tokens: CodeOutlineToken[] = [];
 		let program = this._languageService.getProgram();
 		if (program) {
-
-
 			let currentFile = program.getSourceFile(fileName);
 			if (currentFile) {
 				let ordinal = 0;
 				let indentation = 0;
 
-				const getEscapedTextOfIdentifierOrLiteral = function (node?: { kind: ts.SyntaxKind, escapedText?: ts.__String, text?: string }): string | undefined {
-					if(node) {
-						return node.kind === ts.SyntaxKind.Identifier ? node.escapedText as string : node.text;
+				const getEscapedTextOfIdentifierOrLiteral = function (node?: {
+					kind: ts.SyntaxKind;
+					escapedText?: ts.__String;
+					text?: string;
+				}): string | undefined {
+					if (node) {
+						return node.kind === ts.SyntaxKind.Identifier
+							? (node.escapedText as string)
+							: node.text;
 					}
-				}
+				};
 
 				const extractLiteral = (liternalNode: ts.ObjectLiteralExpression) => {
 					let didExtractLiteral = false;
 
 					// Object literals should only be extracted if they have at least a method or any getter/setter
 					let methodCount = 0;
-					liternalNode.properties.forEach(property => {
+					liternalNode.properties.forEach((property) => {
 						switch (property.kind) {
 							case ts.SyntaxKind.MethodDeclaration:
 								methodCount++;
@@ -316,8 +443,11 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, monaco.language
 								didExtractLiteral = true;
 								break;
 							case ts.SyntaxKind.PropertyAssignment:
-								if (property.initializer &&
-									(property.initializer.kind == ts.SyntaxKind.FunctionDeclaration || property.initializer.kind == ts.SyntaxKind.FunctionExpression)) {
+								if (
+									property.initializer &&
+									(property.initializer.kind == ts.SyntaxKind.FunctionDeclaration ||
+										property.initializer.kind == ts.SyntaxKind.FunctionExpression)
+								) {
 									methodCount++;
 								}
 						}
@@ -333,20 +463,27 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, monaco.language
 
 						// Compute the name for assignments, call expressions and others
 						let name = '';
-						if (parentNode.kind == ts.SyntaxKind.VariableDeclaration || parentNode.kind == ts.SyntaxKind.PropertyAssignment) {
-							let parentNodeAsVariableDeclaration = parentNode as ts.Node & { name: ts.PropertyName };
-							name = getEscapedTextOfIdentifierOrLiteral(parentNodeAsVariableDeclaration.name) || '';
-						}
-						else if (parentNode.kind == ts.SyntaxKind.CallExpression) {
+						if (
+							parentNode.kind == ts.SyntaxKind.VariableDeclaration ||
+							parentNode.kind == ts.SyntaxKind.PropertyAssignment
+						) {
+							let parentNodeAsVariableDeclaration = parentNode as ts.Node & {
+								name: ts.PropertyName;
+							};
+							name =
+								getEscapedTextOfIdentifierOrLiteral(parentNodeAsVariableDeclaration.name) || '';
+						} else if (parentNode.kind == ts.SyntaxKind.CallExpression) {
 							let parentNodeAsCallExpression = parentNode as ts.CallExpression;
-							name = (parentNodeAsCallExpression.expression && parentNodeAsCallExpression.expression.getFullText().trim()) || '';
+							name =
+								(parentNodeAsCallExpression.expression &&
+									parentNodeAsCallExpression.expression.getFullText().trim()) ||
+								'';
 							if (name) {
 								let nameTokens = name.split('\n');
 								name = nameTokens[nameTokens.length - 1];
 								name = name + '()';
 							}
-						}
-						else if (parentNode.kind == ts.SyntaxKind.BinaryExpression) {
+						} else if (parentNode.kind == ts.SyntaxKind.BinaryExpression) {
 							let parentNodeAsBinaryExpression = parentNode as ts.BinaryExpression;
 							// Only handle these for assignments
 							let sign: ts.BinaryOperatorToken = parentNodeAsBinaryExpression.operatorToken;
@@ -355,7 +492,7 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, monaco.language
 								let nameTokens;
 								switch (left.kind) {
 									case ts.SyntaxKind.VariableDeclaration:
-										let leftVariableDeclaration = left as unknown as ts.VariableDeclaration;
+										let leftVariableDeclaration = (left as unknown) as ts.VariableDeclaration;
 										name = getEscapedTextOfIdentifierOrLiteral(leftVariableDeclaration.name) || '';
 										break;
 									case ts.SyntaxKind.PropertyAccessExpression:
@@ -377,20 +514,19 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, monaco.language
 					}
 
 					return didExtractLiteral;
-				}
+				};
 
 				const extractClass = function (classNode: ts.ClassDeclaration) {
 					ordinal++;
 					if (classNode.name) {
 						tokens.push({
-							name: getEscapedTextOfIdentifierOrLiteral(classNode.name) || "",
+							name: getEscapedTextOfIdentifierOrLiteral(classNode.name) || '',
 							kind: CodeOutlineTokenKind.Class,
 							ordinal: ordinal,
 							line: currentFile?.getLineAndCharacterOfPosition(classNode.getStart()).line || 0,
 							indentAmount: indentation
 						});
-					}
-					else {
+					} else {
 						tokens.push({
 							name: '{}',
 							kind: CodeOutlineTokenKind.Class,
@@ -399,7 +535,7 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, monaco.language
 							indentAmount: indentation
 						});
 					}
-				}
+				};
 
 				const extractMethod = function (methodNode: ts.FunctionLikeDeclaration) {
 					ordinal++;
@@ -416,21 +552,21 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, monaco.language
 						let parentNodeAsPropertyAssignment = parentNode as ts.PropertyAssignment;
 						name = getEscapedTextOfIdentifierOrLiteral(parentNodeAsPropertyAssignment.name) || '';
 						isMethodKind = true;
-					}
-					else if (parentNode.kind == ts.SyntaxKind.VariableDeclaration) {
+					} else if (parentNode.kind == ts.SyntaxKind.VariableDeclaration) {
 						let parentNodeAsVariableDeclaration = parentNode as ts.VariableDeclaration;
 						name = getEscapedTextOfIdentifierOrLiteral(parentNodeAsVariableDeclaration.name) || '';
-					}
-					else if (parentNode.kind == ts.SyntaxKind.CallExpression) {
+					} else if (parentNode.kind == ts.SyntaxKind.CallExpression) {
 						let parentNodeAsCallExpression = parentNode as ts.CallExpression;
-						name = (parentNodeAsCallExpression.expression && parentNodeAsCallExpression.expression.getFullText().trim()) || '';
+						name =
+							(parentNodeAsCallExpression.expression &&
+								parentNodeAsCallExpression.expression.getFullText().trim()) ||
+							'';
 						if (name) {
 							let nameTokens = name.split('\n');
 							name = nameTokens[nameTokens.length - 1].trim();
 							name = name + '()';
 						}
-					}
-					else if (parentNode.kind == ts.SyntaxKind.BinaryExpression) {
+					} else if (parentNode.kind == ts.SyntaxKind.BinaryExpression) {
 						// Only handle these for assignments
 						let parentNodeAsBinaryExpression = parentNode as ts.BinaryExpression;
 						let sign = parentNodeAsBinaryExpression.operatorToken;
@@ -439,7 +575,7 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, monaco.language
 							let nameTokens;
 							switch (left.kind) {
 								case ts.SyntaxKind.VariableDeclaration:
-									let leftAsVariableDeclaration = left as unknown as ts.VariableDeclaration;
+									let leftAsVariableDeclaration = (left as unknown) as ts.VariableDeclaration;
 									name = getEscapedTextOfIdentifierOrLiteral(leftAsVariableDeclaration.name) || '';
 									break;
 								case ts.SyntaxKind.PropertyAccessExpression:
@@ -459,7 +595,7 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, monaco.language
 								ordinal: ordinal,
 								line: line,
 								indentAmount: indentation
-							})
+							});
 							break;
 						case ts.SyntaxKind.MethodDeclaration:
 							let nodeAsMethodDeclaration = node as ts.MethodDeclaration;
@@ -469,18 +605,21 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, monaco.language
 								ordinal: ordinal,
 								line: line,
 								indentAmount: indentation
-							})
+							});
 							break;
 						case ts.SyntaxKind.FunctionExpression:
 						case ts.SyntaxKind.FunctionDeclaration:
 							let nodeAsFunctionDeclaration = node as ts.FunctionExpression;
 							tokens.push({
-								name: getEscapedTextOfIdentifierOrLiteral(nodeAsFunctionDeclaration.name) || name || '{}',
+								name:
+									getEscapedTextOfIdentifierOrLiteral(nodeAsFunctionDeclaration.name) ||
+									name ||
+									'{}',
 								kind: isMethodKind ? CodeOutlineTokenKind.Method : CodeOutlineTokenKind.Function,
 								ordinal: ordinal,
 								line: line,
 								indentAmount: indentation
-							})
+							});
 							break;
 						case ts.SyntaxKind.GetAccessor:
 							tokens.push({
@@ -489,7 +628,7 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, monaco.language
 								ordinal: ordinal,
 								line: line,
 								indentAmount: indentation
-							})
+							});
 							break;
 						case ts.SyntaxKind.SetAccessor:
 							tokens.push({
@@ -498,7 +637,7 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, monaco.language
 								ordinal: ordinal,
 								line: line,
 								indentAmount: indentation
-							})
+							});
 							break;
 						case ts.SyntaxKind.ArrowFunction:
 							tokens.push({
@@ -507,12 +646,12 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, monaco.language
 								ordinal: ordinal,
 								line: line,
 								indentAmount: indentation
-							})
+							});
 							break;
 						default:
 							break;
 					}
-				}
+				};
 
 				const buildOutline = function (node: ts.Node): void {
 					let didIndent = false;
@@ -547,28 +686,55 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, monaco.language
 
 					ts.forEachChild(node, buildOutline);
 					if (didIndent) indentation -= 1;
-				}
+				};
 
 				buildOutline(currentFile);
 			}
 		}
 		return tokens;
 	}
-	getCodeFixesAtPosition(fileName: string, start: number, end: number, errorCodes: number[], formatOptions: ts.FormatCodeOptions): Promise<ReadonlyArray<ts.CodeFixAction>> {
-		const preferences = {}
-		return Promise.resolve(this._languageService.getCodeFixesAtPosition(fileName, start, end, errorCodes, formatOptions, preferences));
-	}
-
-	updateExtraLibs(extraLibs: IExtraLibs) {
-		this._extraLibs = extraLibs;
-	}
 }
 
 export interface ICreateData {
 	compilerOptions: ts.CompilerOptions;
 	extraLibs: IExtraLibs;
+	customWorkerPath?: string;
 }
 
-export function create(ctx: IWorkerContext, createData: ICreateData): TypeScriptWorker {
-	return new TypeScriptWorker(ctx, createData);
+/** The shape of the factory */
+export interface CustomTSWebWorkerFactory {
+	(
+		TSWorkerClass: typeof TypeScriptWorker,
+		tsc: typeof ts,
+		libs: Record<string, string>
+	): typeof TypeScriptWorker;
+}
+
+declare global {
+	var importScripts: (path: string) => void | undefined;
+	var customTSWorkerFactory: CustomTSWebWorkerFactory | undefined;
+}
+
+export function create(ctx: worker.IWorkerContext, createData: ICreateData): TypeScriptWorker {
+	let TSWorkerClass = TypeScriptWorker;
+	if (createData.customWorkerPath) {
+		if (typeof importScripts === 'undefined') {
+			console.warn(
+				'Monaco is not using webworkers for background tasks, and that is needed to support the customWorkerPath flag'
+			);
+		} else {
+			importScripts(createData.customWorkerPath);
+
+			const workerFactoryFunc: CustomTSWebWorkerFactory | undefined = self.customTSWorkerFactory;
+			if (!workerFactoryFunc) {
+				throw new Error(
+					`The script at ${createData.customWorkerPath} does not add customTSWorkerFactory to self`
+				);
+			}
+
+			TSWorkerClass = workerFactoryFunc(TypeScriptWorker, ts, libFileMap);
+		}
+	}
+
+	return new TSWorkerClass(ctx, createData);
 }
