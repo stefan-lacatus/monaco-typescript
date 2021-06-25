@@ -8,10 +8,29 @@ import * as ts from './lib/typescriptServices';
 import { libFileMap } from './lib/lib';
 import {
 	Diagnostic,
+	DiagnosticRelatedInformation,
 	IExtraLibs,
 	TypeScriptWorker as ITypeScriptWorker
 } from './monaco.contribution';
-import { worker } from './fillers/monaco-editor-core';
+import { Uri, worker } from './fillers/monaco-editor-core';
+
+/**
+ * Loading a default lib as a source file will mess up TS completely.
+ * So our strategy is to hide such a text model from TS.
+ * See https://github.com/microsoft/monaco-editor/issues/2182
+ */
+function fileNameIsLib(resource: Uri | string): boolean {
+	if (typeof resource === 'string') {
+		if (/^file:\/\/\//.test(resource)) {
+			return !!libFileMap[resource.substr(8)];
+		}
+		return false;
+	}
+	if (resource.path.indexOf('/lib.') === 0) {
+		return !!libFileMap[resource.path.slice(1)];
+	}
+	return false;
+}
 
 interface CodeOutlineToken {
 	name: string;
@@ -52,7 +71,8 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, ITypeScriptWork
 	}
 
 	getScriptFileNames(): string[] {
-		let models = this._ctx.getMirrorModels().map((model) => model.uri.toString());
+		const allModels = this._ctx.getMirrorModels().map((model) => model.uri);
+		const models = allModels.filter((uri) => !fileNameIsLib(uri)).map((uri) => uri.toString());
 		return models.concat(Object.keys(this._extraLibs));
 	}
 
@@ -176,35 +196,56 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, ITypeScriptWork
 
 	// --- language features
 
-	private static clearFiles(diagnostics: ts.Diagnostic[]): Diagnostic[] {
+	private static clearFiles(tsDiagnostics: ts.Diagnostic[]): Diagnostic[] {
 		// Clear the `file` field, which cannot be JSON'yfied because it
-		// contains cyclic data structures.
-		diagnostics.forEach((diag) => {
-			diag.file = undefined;
-			const related = <ts.Diagnostic[]>diag.relatedInformation;
-			if (related) {
-				related.forEach((diag2) => (diag2.file = undefined));
+		// contains cyclic data structures, except for the `fileName`
+		// property.
+		// Do a deep clone so we don't mutate the ts.Diagnostic object (see https://github.com/microsoft/monaco-editor/issues/2392)
+		const diagnostics: Diagnostic[] = [];
+		for (const tsDiagnostic of tsDiagnostics) {
+			const diagnostic: Diagnostic = { ...tsDiagnostic };
+			diagnostic.file = diagnostic.file ? { fileName: diagnostic.file.fileName } : undefined;
+			if (tsDiagnostic.relatedInformation) {
+				diagnostic.relatedInformation = [];
+				for (const tsRelatedDiagnostic of tsDiagnostic.relatedInformation) {
+					const relatedDiagnostic: DiagnosticRelatedInformation = { ...tsRelatedDiagnostic };
+					relatedDiagnostic.file = relatedDiagnostic.file ? { fileName: relatedDiagnostic.file.fileName } : undefined
+					diagnostic.relatedInformation.push(relatedDiagnostic);
+				}
 			}
-		});
-		return <Diagnostic[]>diagnostics;
+			diagnostics.push(diagnostic);
+		}
+		return diagnostics;
 	}
 
 	async getSyntacticDiagnostics(fileName: string): Promise<Diagnostic[]> {
+		if (fileNameIsLib(fileName)) {
+			return [];
+		}
 		const diagnostics = this._languageService.getSyntacticDiagnostics(fileName);
 		return TypeScriptWorker.clearFiles(diagnostics);
 	}
 
 	async getSemanticDiagnostics(fileName: string): Promise<Diagnostic[]> {
+		if (fileNameIsLib(fileName)) {
+			return [];
+		}
 		const diagnostics = this._languageService.getSemanticDiagnostics(fileName);
 		return TypeScriptWorker.clearFiles(diagnostics);
 	}
 
 	async getSuggestionDiagnostics(fileName: string): Promise<Diagnostic[]> {
+		if (fileNameIsLib(fileName)) {
+			return [];
+		}
 		const diagnostics = this._languageService.getSuggestionDiagnostics(fileName);
 		return TypeScriptWorker.clearFiles(diagnostics);
 	}
 
 	async getCompilerOptionsDiagnostics(fileName: string): Promise<Diagnostic[]> {
+		if (fileNameIsLib(fileName)) {
+			return [];
+		}
 		const diagnostics = this._languageService.getCompilerOptionsDiagnostics();
 		return TypeScriptWorker.clearFiles(diagnostics);
 	}
@@ -213,6 +254,9 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, ITypeScriptWork
 		fileName: string,
 		position: number
 	): Promise<ts.CompletionInfo | undefined> {
+		if (fileNameIsLib(fileName)) {
+			return undefined;
+		}
 		return this._languageService.getCompletionsAtPosition(fileName, position, undefined);
 	}
 
@@ -227,21 +271,29 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, ITypeScriptWork
 			entry,
 			undefined,
 			undefined,
+			undefined,
 			undefined
 		);
 	}
 
 	async getSignatureHelpItems(
 		fileName: string,
-		position: number
+		position: number,
+		options: ts.SignatureHelpItemsOptions | undefined
 	): Promise<ts.SignatureHelpItems | undefined> {
-		return this._languageService.getSignatureHelpItems(fileName, position, undefined);
+		if (fileNameIsLib(fileName)) {
+			return undefined;
+		}
+		return this._languageService.getSignatureHelpItems(fileName, position, options);
 	}
 
 	async getQuickInfoAtPosition(
 		fileName: string,
 		position: number
 	): Promise<ts.QuickInfo | undefined> {
+		if (fileNameIsLib(fileName)) {
+			return undefined;
+		}
 		return this._languageService.getQuickInfoAtPosition(fileName, position);
 	}
 
@@ -249,6 +301,9 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, ITypeScriptWork
 		fileName: string,
 		position: number
 	): Promise<ReadonlyArray<ts.ReferenceEntry> | undefined> {
+		if (fileNameIsLib(fileName)) {
+			return undefined;
+		}
 		return this._languageService.getOccurrencesAtPosition(fileName, position);
 	}
 
@@ -256,6 +311,9 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, ITypeScriptWork
 		fileName: string,
 		position: number
 	): Promise<ReadonlyArray<ts.DefinitionInfo> | undefined> {
+		if (fileNameIsLib(fileName)) {
+			return undefined;
+		}
 		return this._languageService.getDefinitionAtPosition(fileName, position);
 	}
 
@@ -263,10 +321,16 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, ITypeScriptWork
 		fileName: string,
 		position: number
 	): Promise<ts.ReferenceEntry[] | undefined> {
+		if (fileNameIsLib(fileName)) {
+			return undefined;
+		}
 		return this._languageService.getReferencesAtPosition(fileName, position);
 	}
 
 	async getNavigationBarItems(fileName: string): Promise<ts.NavigationBarItem[]> {
+		if (fileNameIsLib(fileName)) {
+			return [];
+		}
 		return this._languageService.getNavigationBarItems(fileName);
 	}
 
@@ -274,6 +338,9 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, ITypeScriptWork
 		fileName: string,
 		options: ts.FormatCodeOptions
 	): Promise<ts.TextChange[]> {
+		if (fileNameIsLib(fileName)) {
+			return [];
+		}
 		return this._languageService.getFormattingEditsForDocument(fileName, options);
 	}
 
@@ -283,6 +350,9 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, ITypeScriptWork
 		end: number,
 		options: ts.FormatCodeOptions
 	): Promise<ts.TextChange[]> {
+		if (fileNameIsLib(fileName)) {
+			return [];
+		}
 		return this._languageService.getFormattingEditsForRange(fileName, start, end, options);
 	}
 
@@ -292,6 +362,9 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, ITypeScriptWork
 		ch: string,
 		options: ts.FormatCodeOptions
 	): Promise<ts.TextChange[]> {
+		if (fileNameIsLib(fileName)) {
+			return [];
+		}
 		return this._languageService.getFormattingEditsAfterKeystroke(fileName, postion, ch, options);
 	}
 
@@ -302,6 +375,9 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, ITypeScriptWork
 		findInComments: boolean,
 		providePrefixAndSuffixTextForRename: boolean
 	): Promise<readonly ts.RenameLocation[] | undefined> {
+		if (fileNameIsLib(fileName)) {
+			return undefined;
+		}
 		return this._languageService.findRenameLocations(
 			fileName,
 			position,
@@ -316,10 +392,16 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, ITypeScriptWork
 		position: number,
 		options: ts.RenameInfoOptions
 	): Promise<ts.RenameInfo> {
+		if (fileNameIsLib(fileName)) {
+			return { canRename: false, localizedErrorMessage: 'Cannot rename in lib file' };
+		}
 		return this._languageService.getRenameInfo(fileName, position, options);
 	}
 
 	async getEmitOutput(fileName: string): Promise<ts.EmitOutput> {
+		if (fileNameIsLib(fileName)) {
+			return { outputFiles: [], emitSkipped: true };
+		}
 		return this._languageService.getEmitOutput(fileName);
 	}
 
@@ -330,6 +412,9 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, ITypeScriptWork
 		errorCodes: number[],
 		formatOptions: ts.FormatCodeOptions
 	): Promise<ReadonlyArray<ts.CodeFixAction>> {
+		if (fileNameIsLib(fileName)) {
+			return [];
+		}
 		const preferences = {};
 		try {
 			return this._languageService.getCodeFixesAtPosition(
@@ -391,7 +476,7 @@ export class TypeScriptWorker implements ts.LanguageServiceHost, ITypeScriptWork
 							// matches Things[me.property]
 							let type = typeChecker.getTypeAtLocation(node.argumentExpression);
 							if ('value' in type) {
-								referencedEntities[node.expression.getText()][type['value']] = true;
+								referencedEntities[node.expression.getText()][(type as any)['value']] = true;
 							}
 						} else if (ts.isStringLiteral(node.argumentExpression)) {
 							// matches Things["test"]

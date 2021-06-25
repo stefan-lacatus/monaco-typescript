@@ -26,7 +26,9 @@ export enum JsxEmit {
 	None = 0,
 	Preserve = 1,
 	React = 2,
-	ReactNative = 3
+	ReactNative = 3,
+	ReactJSX = 4,
+	ReactJSXDev = 5
 }
 
 export enum NewLineKind {
@@ -156,6 +158,11 @@ export interface DiagnosticsOptions {
 	noSemanticValidation?: boolean;
 	noSyntaxValidation?: boolean;
 	noSuggestionDiagnostics?: boolean;
+	/**
+	 * Limit diagnostic computation to only visible files.
+	 * Defaults to false.
+	 */
+	onlyVisible?: boolean;
 	diagnosticCodesToIgnore?: number[];
 }
 
@@ -187,15 +194,16 @@ interface DiagnosticMessageChain {
 export interface Diagnostic extends DiagnosticRelatedInformation {
 	/** May store more in future. For now, this will simply be `true` to indicate when a diagnostic is an unused-identifier diagnostic. */
 	reportsUnnecessary?: {};
+	reportsDeprecated?: {};
 	source?: string;
 	relatedInformation?: DiagnosticRelatedInformation[];
 }
-interface DiagnosticRelatedInformation {
+export interface DiagnosticRelatedInformation {
 	/** Diagnostic category: warning = 0, error = 1, suggestion = 2, message = 3 */
 	category: 0 | 1 | 2 | 3;
 	code: number;
-	/** TypeScriptWorker removes this to avoid serializing circular JSON structures. */
-	file: undefined;
+	/** TypeScriptWorker removes all but the `fileName` property to avoid serializing circular JSON structures. */
+	file: { fileName: string } | undefined;
 	start: number | undefined;
 	length: number | undefined;
 	messageText: string | DiagnosticMessageChain;
@@ -340,7 +348,7 @@ export interface TypeScriptWorker {
 	 * Get signature help items for the item at the given file and position.
 	 * @returns `Promise<typescript.SignatureHelpItems | undefined>`
 	 */
-	getSignatureHelpItems(fileName: string, position: number): Promise<any | undefined>;
+	getSignatureHelpItems(fileName: string, position: number, options: any): Promise<any | undefined>;
 
 	/**
 	 * Get quick info for the item at the given position in the file.
