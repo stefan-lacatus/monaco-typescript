@@ -727,7 +727,8 @@ export function setupNamedLanguage(
 	getTypeScriptWorker,
 	getJavaScriptWorker,
 	getLanguageWorker,
-	setupNamedLanguage
+	setupNamedLanguage,
+	getLanguageDefaults
 };
 
 // --- Registration to monaco editor ---
